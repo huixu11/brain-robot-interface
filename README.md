@@ -1,33 +1,54 @@
-# Hack Nation Unitree Interface (Standalone)
+# Brain-Robot Interface (Hack Nation)
 
-Minimal MuJoCo + webcam gesture teleop for quick demos.
+Single `cmd_vel` pipeline with three modes:
+
+- **SimWalk**: MJLab ONNX policy in MuJoCo (walks in sim).
+- **RobotWalk**: Unitree built-in locomotion via Sport RPC (real robot).
+- **MirrorView**: subscribe to LowState and mirror the robot in MuJoCo.
 
 ## Setup
 
 ```bash
+git clone --recurse-submodules git@github.com:Nabla7/brain-robot-interface.git
+cd brain-robot-interface
+
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+If you already cloned without submodules:
+```bash
+git submodule update --init --recursive
+```
+
 ## Run
 
-### G1 scene (default)
+### SimWalk (MJLab ONNX in MuJoCo)
 ```bash
 mjpython run_sim.py \
-  --xml /Users/pimvandenbosch/Desktop/unitree_mujoco/unitree_robots/g1/scene.xml \
+  --bundle bundles/g1_mjlab \
   --source both \
   --log-hz 30 \
   --show-cv
 ```
 
-### GO2 scene
+### RobotWalk (real Unitree G1, Sport RPC)
 ```bash
-mjpython run_sim.py \
-  --xml /Users/pimvandenbosch/Desktop/unitree_mujoco/unitree_robots/go2/scene.xml \
-  --source both \
+python -m src.apps.run_robot_walk \
+  --interface en0 \
+  --domain-id 0 \
+  --source cv \
   --log-hz 30 \
   --show-cv
+```
+
+### MirrorView (robot → MuJoCo)
+```bash
+mjpython -m src.apps.run_mirror_view \
+  --xml third_party/unitree_mujoco/unitree_robots/g1/scene.xml \
+  --interface en0 \
+  --domain-id 0
 ```
 
 ## Gesture mapping (MediaPipe Pose)
@@ -37,36 +58,36 @@ mjpython run_sim.py \
 - Both wrists above midline → **forward**
 - Otherwise → **stop**
 
-The midline and debounce can be tuned:
+Tune thresholds:
 ```bash
-mjpython run_sim.py --xml ... --midline 0.5 --hysteresis-px 20 --stable-ms 150
+mjpython run_sim.py --midline 0.5 --hysteresis-px 20 --stable-ms 150
 ```
 
-MediaPipe will auto-download the pose model to `models/pose_landmarker_lite.task` on first run. You can override with `--pose-model /path/to/model.task`.
+MediaPipe auto-downloads the pose model to `models/pose_landmarker_lite.task` on first run.
 
-## Keyboard controls
+## Keyboard controls (SimWalk only)
 
 - `W` / `Up`: forward
 - `A` / `Left`: left
 - `D` / `Right`: right
+- `Q` / `E`: yaw left/right
 - `S` / `Down` / `Space`: stop
 
 Keyboard inputs override CV for `--key-timeout` seconds.
 
 ## Troubleshooting
 
+- **macOS viewer**: use `mjpython` for MuJoCo windows.
 - **macOS camera permissions**: allow Terminal/Python in System Settings → Privacy → Camera.
-- **macOS viewer**: use `mjpython` (MuJoCo provides it) or the viewer will fail to launch.
 - **Black CV window**: try `--cam 1` or unplug/replug the webcam.
 - **CV preview**: the preview runs in a separate process to avoid conflicts with MuJoCo on macOS.
-- **Robot doesn’t move**: increase `--force` (default 150), or ensure the body name is valid via `--body torso_link` (G1/H1) or `--body base_link` (GO2).
-- **MediaPipe error about solutions**: this demo uses the tasks API; ensure the model download succeeded or pass `--pose-model`.
+- **MediaPipe errors**: ensure the model download succeeded or pass `--pose-model`.
 
 ## Output
 
 CSV logs are written to `logs/session_<timestamp>.csv` with:
 
 ```
-ts,cmd,source,left_x,left_y,right_x,right_y,left_vis,right_vis
+ts,vx,vy,yaw_rate,source,left_x,left_y,right_x,right_y,left_vis,right_vis
 ```
 

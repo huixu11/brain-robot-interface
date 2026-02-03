@@ -11,7 +11,9 @@ from typing import Callable
 @dataclass
 class LogSample:
     ts: float
-    cmd: str
+    vx: float
+    vy: float
+    yaw_rate: float
     source: str
     left_x: float | None
     left_y: float | None
@@ -39,7 +41,9 @@ class CsvLogger:
         self._writer.writerow(
             [
                 "ts",
-                "cmd",
+                "vx",
+                "vy",
+                "yaw_rate",
                 "source",
                 "left_x",
                 "left_y",
@@ -73,7 +77,9 @@ class CsvLogger:
                 self._writer.writerow(
                     [
                         f"{sample.ts:.6f}",
-                        sample.cmd,
+                        sample.vx,
+                        sample.vy,
+                        sample.yaw_rate,
                         sample.source,
                         sample.left_x,
                         sample.left_y,

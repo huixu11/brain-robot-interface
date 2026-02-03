@@ -42,7 +42,10 @@ class CvPreviewer:
         except Exception:
             pass
         if self._proc:
-            self._proc.join(timeout=1.0)
+            self._proc.join(timeout=0.2)
+            if self._proc.is_alive():
+                self._proc.terminate()
+                self._proc.join(timeout=0.2)
 
     def show(self, frame) -> None:
         if not self._enabled or not self._queue:
@@ -57,6 +60,10 @@ class CvPreviewer:
             pass
 
     def _run(self) -> None:
+        import signal
+
+        # Let the parent handle Ctrl-C; ignore SIGINT in the preview process.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         cv2.namedWindow("pose_gestures", cv2.WINDOW_NORMAL)
         while True:
             frame = self._queue.get()
@@ -303,6 +310,8 @@ class PoseGestureDetector:
         return self._last_cmd
 
     def _render_overlay(self, frame, state: GestureState, midline: float) -> None:
+        # Mirror preview for more intuitive interaction.
+        frame = cv2.flip(frame, 1)
         cv2.line(
             frame,
             (0, int(midline)),

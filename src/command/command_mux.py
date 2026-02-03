@@ -5,37 +5,35 @@ import threading
 import time
 from typing import Optional
 
+from .cmd_vel import CmdVel
+
 
 @dataclass
 class CommandSample:
-    cmd: str
-    source: str
-    ts: float
+    cmd: CmdVel
 
 
 class CommandMux:
     def __init__(self, key_timeout_s: float = 0.35) -> None:
         self._lock = threading.Lock()
         self._key_timeout_s = key_timeout_s
-        self._keyboard: Optional[CommandSample] = None
-        self._cv: Optional[CommandSample] = None
+        self._keyboard: Optional[CmdVel] = None
+        self._cv: Optional[CmdVel] = None
 
-    def update_keyboard(self, cmd: str) -> None:
-        now = time.time()
+    def update_keyboard(self, cmd: CmdVel) -> None:
         with self._lock:
-            self._keyboard = CommandSample(cmd=cmd, source="keyboard", ts=now)
+            self._keyboard = cmd
 
-    def update_cv(self, cmd: str, ts: Optional[float] = None) -> None:
-        now = ts if ts is not None else time.time()
+    def update_cv(self, cmd: CmdVel) -> None:
         with self._lock:
-            self._cv = CommandSample(cmd=cmd, source="cv", ts=now)
+            self._cv = cmd
 
-    def sample(self) -> CommandSample:
+    def sample(self) -> CmdVel:
         now = time.time()
         with self._lock:
             if self._keyboard and (now - self._keyboard.ts) <= self._key_timeout_s:
                 return self._keyboard
             if self._cv:
                 return self._cv
-        return CommandSample(cmd="stop", source="none", ts=now)
+        return CmdVel(0.0, 0.0, 0.0, ts=now, source="none")
 
