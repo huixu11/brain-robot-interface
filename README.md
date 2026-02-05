@@ -1,10 +1,8 @@
-# Brain-Robot Interface (Hack Nation)
+# Brain Robot Interface
 
-Single `cmd_vel` pipeline with three modes:
+Minimal API for controlling Unitree robots in sim or on hardware using discrete actions.
 
-- **SimWalk**: MJLab ONNX policy in MuJoCo (walks in sim).
-- **RobotWalk**: Unitree built-in locomotion via Sport RPC (real robot).
-- **MirrorView**: subscribe to LowState and mirror the robot in MuJoCo.
+The only intended entrypoint is `examples/minimal_policy.py`.
 
 ## Setup
 
@@ -15,6 +13,7 @@ cd brain-robot-interface
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -e .
 ```
 
 If you already cloned without submodules:
@@ -24,104 +23,51 @@ git submodule update --init --recursive
 
 ## Run
 
-### macOS
-
-Use `mjpython` for any MuJoCo viewer windows.
-
-#### SimWalk (MJLab ONNX in MuJoCo)
+### Sim (macOS)
 ```bash
-mjpython run_sim.py \
-  --bundle bundles/g1_mjlab \
-  --source both \
-  --log-hz 30 \
-  --show-cv
+mjpython examples/minimal_policy.py
 ```
 
-#### RobotWalk (real Unitree G1, Sport RPC)
+### Sim (Linux)
 ```bash
-python -m src.apps.run_robot_walk \
-  --interface en0 \
-  --domain-id 0 \
-  --source cv \
-  --log-hz 30 \
-  --show-cv
+python examples/minimal_policy.py
 ```
 
-#### MirrorView (robot → MuJoCo)
+### Robot + Mirror
+Set `backend="robot"` in the example script and run it normally:
 ```bash
-mjpython -m src.apps.run_mirror_view \
-  --xml bundles/g1_mjlab/scene.xml \
-  --interface en0 \
-  --domain-id 0
+python examples/minimal_policy.py
 ```
 
-### Linux
+## API
 
-Use the venv `python` for all commands.
+```python
+from bri import Action, Controller
 
-#### SimWalk (MJLab ONNX in MuJoCo)
-```bash
-python run_sim.py \
-  --bundle bundles/g1_mjlab \
-  --source both \
-  --log-hz 30 \
-  --show-cv
+ctrl = Controller(
+    backend="sim",
+    hold_s=0.3,
+    forward_speed=0.6,
+    yaw_rate=1.5,
+    smooth_alpha=0.2,
+)
+ctrl.start()
+ctrl.set_action(Action.FORWARD)
 ```
 
-#### RobotWalk (real Unitree G1, Sport RPC)
-```bash
-python -m src.apps.run_robot_walk \
-  --interface en0 \
-  --domain-id 0 \
-  --source cv \
-  --log-hz 30 \
-  --show-cv
-```
+## Parameters
 
-#### MirrorView (robot → MuJoCo)
-```bash
-python -m src.apps.run_mirror_view \
-  --xml bundles/g1_mjlab/scene.xml \
-  --interface en0 \
-  --domain-id 0
-```
+- `backend`: `"sim"` or `"robot"`
+- `hold_s`: seconds to keep last action before auto-STOP
+- `forward_speed`: forward velocity
+- `yaw_rate`: rotation speed
+- `smooth_alpha`: smoothing factor (0–1)
+- `ctrl_hz`: internal control loop rate
+- `interface`, `domain_id`: DDS settings for real robot
+- `mirror`: when `backend="robot"`, mirror view is enabled by default
 
-## Gesture mapping (MediaPipe Pose)
+## Notes
 
-- Left wrist above midline → **left**
-- Right wrist above midline → **right**
-- Both wrists above midline → **forward**
-- Otherwise → **stop**
-
-Tune thresholds:
-```bash
-mjpython run_sim.py --midline 0.5 --hysteresis-px 20 --stable-ms 150
-```
-
-MediaPipe auto-downloads the pose model to `models/pose_landmarker_lite.task` on first run.
-
-## Keyboard controls (SimWalk only)
-
-- `Up`: forward
-- `Left`: left
-- `Right`: right
-- `Down`: stop
-
-Keyboard inputs override CV for `--key-timeout` seconds.
-
-## Troubleshooting
-
-- **macOS viewer**: use `mjpython` for MuJoCo windows.
-- **macOS camera permissions**: allow Terminal/Python in System Settings → Privacy → Camera.
-- **Black CV window**: try `--cam 1` or unplug/replug the webcam.
-- **CV preview**: the preview runs in a separate process to avoid conflicts with MuJoCo on macOS.
-- **MediaPipe errors**: ensure the model download succeeded or pass `--pose-model`.
-
-## Output
-
-CSV logs are written to `logs/session_<timestamp>.csv` with:
-
-```
-ts,vx,vy,yaw_rate,source,left_x,left_y,right_x,right_y,left_vis,right_vis
-```
+- On macOS, use `mjpython` for any MuJoCo window.
+- Robot mode requires DDS deps (e.g., `cyclonedds`) from Unitree SDK.
 

@@ -1,6 +1,4 @@
 mujoco
-opencv-python
-mediapipe
 numpy
 onnxruntime
 
