@@ -41,6 +41,8 @@ class ActionController:
 
         if action == Action.FORWARD:
             cmd = CmdVel(self._cfg.forward_speed, 0.0, 0.0, ts=now, source="policy")
+        elif action == Action.BACKWARD:
+            cmd = CmdVel(-self._cfg.forward_speed, 0.0, 0.0, ts=now, source="policy")
         elif action == Action.LEFT:
             cmd = CmdVel(0.0, 0.0, self._cfg.yaw_rate, ts=now, source="policy")
         elif action == Action.RIGHT:

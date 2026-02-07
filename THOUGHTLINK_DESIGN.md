@@ -263,7 +263,7 @@ Bonus（赛题加分项）
 - 新增 `examples/intent_policy.py`：execution & testing script（模型预测 -> 稳定器 -> `Controller.set_action` -> MuJoCo 仿真）  
 
 建议的实现里程碑（便于在现有仓库上逐步验证，而不是一次性大改）：  
-1. 先只实现 `Action.BACKWARD` 并在仿真里验证负 `vx` 的行为。  
+1. 先只实现 `Action.BACKWARD` 并在仿真里验证负 `vx` 的行为（例如新增一个非交互脚本 `examples/action_sequence.py` 顺序执行 FORWARD/BACKWARD/LEFT/RIGHT/STOP）。  
 2. 写一个“完美解码器”版本的 `intent_policy.py`：直接用数据标签在 t=3..3+duration 输出对应动作，验证闭环与日志指标计算。  
 3. 再替换为真实模型推理（Stage 1/Stage 2 + 稳定器），并以日志量化 latency/stability/false triggers 的 tradeoff。  
 

@@ -5,6 +5,7 @@ from enum import Enum
 
 class Action(str, Enum):
     FORWARD = "FORWARD"
+    BACKWARD = "BACKWARD"
     LEFT = "LEFT"
     RIGHT = "RIGHT"
     STOP = "STOP"
