@@ -2,6 +2,7 @@
 __pycache__/
 *.py[codz]
 *$py.class
+robot_control_data
 
 # C extensions
 *.so
