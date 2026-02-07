@@ -201,8 +201,8 @@ Stage 2：Direction（Left/Right/Forward/Backward）
 
 `examples/intent_policy.py` 的职责：
 1. 启动 `Controller(backend="sim")`
-2. 读取 `.npz` chunk 并按 500Hz 进行实时回放
-3. 滑窗推理 + 稳定器 -> `Action`
+2. Step 2（完美解码器 / oracle）：先直接用 `.npz` 的 label + cue timing 产生 action 序列，验证闭环与日志指标计算
+3. Step 3+（真实解码器）：再替换为滑窗推理 + 稳定器 -> `Action`
 4. 调用 `ctrl.set_action(action)` 驱动仿真
 5. 记录日志以量化 latency/stability/false triggers
 
