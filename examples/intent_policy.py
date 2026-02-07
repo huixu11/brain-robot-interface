@@ -11,42 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from bri import Action, Controller
-
-
-def _normalize_label(raw: str) -> str:
-    s = raw.strip().lower()
-    s = s.replace("_", " ")
-    s = " ".join(s.split())
-
-    # Common variants/typos observed in the dataset README.
-    if "tongue" in s:
-        return "TONGUE_TAPPING"
-    if "relax" in s:
-        return "RELAX"
-    if "both" in s and ("fist" in s or "first" in s):
-        return "BOTH_FISTS"
-    if "left" in s and ("fist" in s or "first" in s):
-        return "LEFT_FIST"
-    if "right" in s and ("fist" in s or "first" in s):
-        return "RIGHT_FIST"
-
-    raise ValueError(f"Unknown label string: {raw!r}")
-
-
-def _label_to_action(canon_label: str) -> Action:
-    # Requirement_doc.md expects left/right/forward/backward intent decoding.
-    # The provided dataset has 5 cues; we use Tongue Tapping as a backward proxy.
-    if canon_label == "LEFT_FIST":
-        return Action.LEFT
-    if canon_label == "RIGHT_FIST":
-        return Action.RIGHT
-    if canon_label == "BOTH_FISTS":
-        return Action.FORWARD
-    if canon_label == "TONGUE_TAPPING":
-        return Action.BACKWARD
-    if canon_label == "RELAX":
-        return Action.STOP
-    raise ValueError(f"Unhandled canonical label: {canon_label}")
+from thoughtlink.labels import cue_is_rest, cue_to_action, normalize_cue_label
 
 
 def _default_npz_path() -> Path:
@@ -77,15 +42,15 @@ def main() -> None:
     subject_id = str(meta.get("subject_id", ""))
     session_id = str(meta.get("session_id", ""))
 
-    canon = _normalize_label(raw_label)
-    move_action = _label_to_action(canon)
+    cue = normalize_cue_label(raw_label)
+    move_action = cue_to_action(cue)
 
     cue_start_s = 3.0
     cue_end_s = min(15.0, cue_start_s + max(0.0, duration_s))
 
     print(f"[intent_policy] npz={path}")
     print(f"[intent_policy] subject_id={subject_id} session_id={session_id}")
-    print(f"[intent_policy] raw_label={raw_label!r} canon={canon} action_during_cue={move_action}")
+    print(f"[intent_policy] raw_label={raw_label!r} canon={cue.value} action_during_cue={move_action}")
     print(f"[intent_policy] cue_window_s=[{cue_start_s:.3f}, {cue_end_s:.3f}] duration={duration_s:.3f}")
 
     ctrl = Controller(backend=args.backend, hold_s=float(args.hold_s))
@@ -108,7 +73,7 @@ def main() -> None:
             if t_sim >= 15.0:
                 break
 
-            if cue_start_s <= t_sim <= cue_end_s and canon != "RELAX":
+            if cue_start_s <= t_sim <= cue_end_s and not cue_is_rest(cue):
                 action = move_action
             else:
                 action = Action.STOP
@@ -136,4 +101,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
