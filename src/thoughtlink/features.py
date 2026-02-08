@@ -18,7 +18,8 @@ def eeg_window_features(x: np.ndarray, fs_hz: float, *, include_fft: bool = True
     if fs_hz <= 0:
         raise ValueError("fs_hz must be > 0")
 
-    x = x.astype(np.float32, copy=False)
+    # Some dataset chunks contain NaNs; make feature extraction robust.
+    x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
 
     mean = x.mean(axis=0)
     std = x.std(axis=0)
