@@ -418,6 +418,44 @@ Bonus（赛题加分项）
 - Interpretability & Visualization：对窗口特征或模型中间表示做降维可视化（PCA/UMAP），展示意图随时间演化。  
 - Longer temporal models：仅在确有收益时引入 RNN/state-space/transformer，并将推理延迟作为硬约束进行对比评测。  
 
+#### 6.10.1 充分利用多用户数据：Multi-Task / Lifelong Learning（ELLA-style）
+
+赛题本身不要求“跨用户零样本泛化”，但在实际非侵入式 BCI 中，“单用户数据少 + 跨 session 漂移”常常是误触发（`REST -> MOVE`）和不稳定的根因之一。为了在**不牺牲实时推理速度**（仍保持线性模型点积级别）的前提下更充分利用多个人的数据，可采用 multi-task learning，并进一步用 ELLA（Efficient Lifelong Learning Algorithm, Ruvolo & Eaton）式的“共享基 + 每用户稀疏系数”来做快速校准与持续学习。
+
+核心思想（把每个用户当作一个 task）：
+- 每个用户都有自己的解码器参数 `w_u`（因为脑信号个体差异大）
+- 但这些 `w_u` 并不是彼此独立，而是可以表示为少量共享“基向量” `L` 的线性组合：`w_u = L s_u`
+- `L` 由多用户数据学到，捕获跨人的共性；`s_u` 是用户特定的稀疏系数，可用少量校准数据快速求解（few-shot / per-user calibration）
+
+在本项目两阶段解码器上的具体参数化（保持 fast + simple）：
+- Stage 1（move/rest，二分类）：
+  - 对每个用户 `u`：`w_u_move = L_move s_u_move`
+  - 预测：`p(move|x) = sigmoid(w_u_move^T x)`
+- Stage 2（direction，4 分类）：
+  - 对每个用户 `u`：`W_u_dir = L_dir S_u_dir`，其中 `W_u_dir` 是 `(d,4)` 权重矩阵，`L_dir` 是 `(d,k)` 字典，`S_u_dir` 是 `(k,4)` 系数矩阵
+  - 预测：`p(dir|x) = softmax(W_u_dir^T x)`
+- 推理成本：与当前 baseline 相同数量级（仍是矩阵乘法/点积），满足赛题的 “fast inference matters more than model size”。
+
+训练与更新流程（从简单到复杂，逐步加码）：
+1) 先做一个强 baseline：全数据（多用户）训练一个“全局模型”作为初始化，然后对目标用户用少量数据 fine-tune（最简单、最容易实现）。
+2) 再做 low-rank / shared-basis（ELLA 风格）：
+   - 离线阶段：用多用户的监督数据学习共享字典 `L_move/L_dir`。
+   - 校准阶段：对新用户只优化 `s_u_move/S_u_dir`（或再加一个轻量 bias），用很少的 chunk/窗口即可把 `REST -> MOVE` 的误触发压住，同时保持 `move_coverage`。
+   - Lifelong（可选）：当同一用户的新 session 到来时，只更新 `s_u`（保持字典固定更安全）；或在离线再训练时批量更新字典。
+
+为什么 ELLA 对本赛题有价值（与 `Requirement_doc.md` 的关注点对齐）：
+- False trigger suppression：共享字典从多用户学习到“更通用的 rest/move 分界”，在目标用户数据不足或漂移时更不容易把 REST 判成 MOVE。
+- Temporal stability：更可靠的 Stage1 概率输出可让稳定器阈值更“合理”，减少依赖极端保守的 `p_move_on/move_on_k`。
+- Scalability：用户侧只需要存 `s_u`（小向量/小矩阵），且可在新 session 到来时快速更新，符合“可扩展系统工程”的范式。
+
+评估方式（必须避免数据泄漏）：
+- Cross-subject（`split=subject`）：用训练 subjects 学 `L`，对 test subject 用少量校准数据解 `s_u`，再在该 subject 的 held-out sessions 上评估 `false_rate_global/move_coverage/onset_latency`。
+- Cross-session（`split=session`，单用户）：当目标用户 session 少时，用其它用户的数据学 `L`，再用目标用户的 1 个 session 解 `s_u`，在其余 session 上评估（模拟“快速校准 + 适配漂移”）。
+
+落地实现建议（仍保持仓库风格的最小依赖）：
+- 不引入重依赖（PyTorch/TF 不是必须）。字典学习与系数求解可以用 Numpy + 坐标下降/ISTA 的 L1（或先用 L2 作为简化版），并将 `L` 与 `s_u` 打包保存为 `.npz`。
+- 与现有闭环系统无缝对接：ELLA/MTL 只替换 `IntentModel.predict_*` 的参数来源；稳定器 `IntentStabilizer`、评测 `eval_closed_loop.py`、仿真脚本 `intent_policy.py` 的接口不变。
+
 ## 7. Why It Matters（对应 `Requirement_doc.md` 第 7 节）
 
 赛题关注的是当大规模机器人系统遇到歧义时，人类判断如何以机器速度、安全注入。ThoughtLink 的价值在于提供一个非侵入式、可部署的意图通道，使一人可监督多机器人并在关键时刻快速介入。
