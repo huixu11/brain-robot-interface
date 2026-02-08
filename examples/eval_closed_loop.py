@@ -305,6 +305,12 @@ def main() -> None:
     ap.add_argument("--dir-k", type=int, default=5)
     ap.add_argument("--dir-off-k", type=int, default=2)
     ap.add_argument("--dir-margin", type=float, default=0.06)
+    ap.add_argument(
+        "--stop-on-dir-uncertain",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="If true, allow direction uncertainty to emit STOP even while in MOVE. If false, hold last direction.",
+    )
 
     ap.add_argument("--print-every", type=int, default=0, help="If >0, print per-chunk metrics every N chunks.")
     args = ap.parse_args()
@@ -389,6 +395,7 @@ def main() -> None:
         dir_k=int(args.dir_k),
         dir_off_k=int(args.dir_off_k),
         dir_margin=float(args.dir_margin),
+        stop_on_dir_uncertain=bool(args.stop_on_dir_uncertain),
     )
 
     print(f"[eval] split={split_kind} subset={subset} chunks={len(eval_chunks)} update_hz={float(args.update_hz):.2f}")

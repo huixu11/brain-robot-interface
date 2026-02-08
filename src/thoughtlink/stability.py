@@ -24,6 +24,7 @@ class StabilityConfig:
     dir_k: int = 5
     dir_off_k: int = 2
     dir_margin: float = 0.06
+    stop_on_dir_uncertain: bool = True
 
 
 class IntentStabilizer:
@@ -130,17 +131,22 @@ class IntentStabilizer:
         if not self._in_move:
             return Action.STOP
 
-        # If direction confidence collapses, clear the direction to STOP until it restabilizes.
+        # If direction confidence collapses, optionally clear the direction to STOP until it restabilizes.
+        # In a hierarchical intent model, STOP is primarily governed by the move/rest detector (stage1).
+        # When stop_on_dir_uncertain=False, we keep the last stable direction instead of flickering STOP.
         if best_idx is not None:
             if best_conf < float(self.cfg.p_dir_off) or margin < float(self.cfg.dir_margin):
                 self._dir_off_count += 1
             else:
                 self._dir_off_count = 0
             if self._dir_off_count >= int(self.cfg.dir_off_k):
-                self._dir_current = None
-                self._dir_candidate = None
-                self._dir_count = 0
-                return Action.STOP
+                if bool(self.cfg.stop_on_dir_uncertain):
+                    self._dir_current = None
+                    self._dir_candidate = None
+                    self._dir_count = 0
+                    return Action.STOP
+                # Hold the current direction; do not force STOP inside MOVE.
+                self._dir_off_count = int(self.cfg.dir_off_k)
 
         # Direction debounce (only when in MOVE and p_dir available).
         if best_idx is not None:
@@ -157,7 +163,11 @@ class IntentStabilizer:
                 self._dir_candidate = None
                 self._dir_count = 0
 
-        # If direction isn't stabilized yet, be conservative and STOP.
+        # If direction isn't stabilized yet, be conservative (STOP) unless the caller explicitly
+        # requests holding behavior (stop_on_dir_uncertain=False).
         if self._dir_current is None:
-            return Action.STOP
+            if not bool(self.cfg.stop_on_dir_uncertain) and best_idx is not None:
+                self._dir_current = int(best_idx)
+            else:
+                return Action.STOP
         return self._idx_to_action(self._dir_current)
