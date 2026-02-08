@@ -810,3 +810,35 @@ python examples\eval_closed_loop.py `
 python examples\intent_policy.py --mode oracle --backend sim --speed 5 --update-hz 50
 python examples\intent_policy.py --mode model --model artifacts\intent_ella_<SUBJECT_ID>.npz --backend sim --speed 5 --update-hz 50 <同一套 best_cfg 参数>
 ```
+
+### 9.6 按 `Requirement_doc.md` 的“必做项”对照清单
+
+`Requirement_doc.md` 的重点不是“离线分数”，而是“实时闭环可用”。为了在最后几个小时不跑偏，建议按下面清单确认你已经覆盖所有评价点：
+
+Intent Decoding Performance
+- 至少在一个 target subject 的 held-out session 上，能输出 5 类高层指令：`STOP/LEFT/RIGHT/FORWARD/BACKWARD`。
+- 用 `eval_closed_loop.py` 在多个 chunks 上汇总（不要只看单个 `.npz`）。
+
+Inference Speed & Latency
+- 报告 `inference_ms mean/p95`（`eval_closed_loop.py` 会打印）。
+- 报告 `update_hz`（例如 50Hz）并说明稳定器的滞后窗口对应的时间常数（例如 `move_on_k/update_hz`）。
+
+Temporal Stability
+- 报告 `switches_per_min`、`stop_toggles`（以及必要时 `dir_switches`）。
+- 在 demo 中展示稳定器作用：同一数据 chunk，oracle vs model 的动作切换对比。
+
+False Trigger Rate & Confidence Handling
+- 明确你使用了哪些机制：阈值（`p_move_on/off`）、去抖/滞后（`*_k`）、EWMA（`ewma_alpha`）、方向不确定时 STOP 或 hold（`stop_on_dir_uncertain`）。
+- 汇报 `false_rate_global`（rest 段误动比例），并同时报告 `move_coverage_global/trigger_rate`，避免退化解（全 STOP）。
+
+Scalability of the Approach (100 robots)
+- 在答辩里用“decode once, fan-out many”说明计算成本不会随机器人数量线性增长。
+- 解释为什么 false_rate 需要更低量级才能支撑大规模 fan-out（本设计的 `<=0.05/<=0.01` KPI 讨论）。
+
+Demo Clarity
+- 必须能在仿真中把“意图 -> 指令 -> 动作”闭环跑起来（`intent_policy.py`）。
+- 推荐展示顺序：oracle（链路正确） -> model（真实噪声 + 稳定器 + tradeoff） -> batch 指标（不是挑样本）。
+
+Bonus（可选但很加分）
+- 同时给出两组参数点：低 false（更慢/覆盖低）与低 latency（更激进/false 稍高），并量化 tradeoff。
+- 明确 failure mode 与下一步（例如某个 eval session no-trigger，如何通过 feature/baseline/权重/轮换评测解决）。
