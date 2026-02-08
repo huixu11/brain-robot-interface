@@ -730,6 +730,7 @@ python examples\intent_policy.py --npz robot_control_data\data\<EVAL_SESSION_ID>
 python examples\intent_policy.py --npz robot_control_data\data\<EVAL_SESSION_ID>-10.npz --mode model --model artifacts\intent_ella_<SUBJECT_ID>.npz --backend sim --speed 1 --update-hz 50 <稳定器参数>
 ```
 （可视化提示：如果你用 `--speed 5` 加速回放，且该 chunk 的 `move_coverage` 很低（例如 `0.04`），那么“非 STOP”可能只持续 `0.4s` 左右的模拟时间，折算到真实时间只有 `0.08s`，再叠加速度平滑（`smooth_alpha`），肉眼很容易觉得“机器人没动”。这种情况优先把 `--speed` 调回 `1` 或 `0.5`，并换一个 `move_coverage` 更高的 demo chunk。）
+（分屏提示：为了录 15-30s 的高质量 demo 视频/GIF，可以加 `--telemetry` 打开一个 OpenCV 小窗，显示 `p_move(t)` 曲线、cue window、当前 action，右侧终端不需要再刷大量日志。录屏时把 MuJoCo viewer 和 telemetry 小窗并排即可。）
 3. 批量闭环指标（展示不是只挑一个 chunk）：
 ```powershell
 python examples\eval_closed_loop.py --split all --subset all --subject-id <SUBJECT_ID> --session-id <EVAL_SESSION_ID> --mode model --model artifacts\intent_ella_<SUBJECT_ID>.npz --update-hz 50 --top-k 5 <稳定器参数>
