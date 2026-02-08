@@ -20,7 +20,10 @@ class StabilityConfig:
     move_on_k: int = 3
     move_off_k: int = 3
     p_dir: float = 0.4
+    p_dir_off: float = 0.35
     dir_k: int = 3
+    dir_off_k: int = 8
+    dir_margin: float = 0.05
 
 
 class IntentStabilizer:
@@ -39,6 +42,7 @@ class IntentStabilizer:
         self._dir_candidate: int | None = None
         self._dir_count: int = 0
         self._dir_current: int | None = None
+        self._dir_off_count: int = 0
 
     @staticmethod
     def _idx_to_action(idx: int) -> Action:
@@ -86,6 +90,15 @@ class IntentStabilizer:
             else:
                 self._p_dir_ema = (a * p_dir + (1.0 - a) * self._p_dir_ema).astype(np.float32, copy=False)
 
+        best_idx: int | None = None
+        best_conf: float = 0.0
+        margin: float = 0.0
+        if self._p_dir_ema is not None:
+            best_idx = int(np.argmax(self._p_dir_ema))
+            best_conf = float(self._p_dir_ema[best_idx])
+            top2 = np.partition(self._p_dir_ema, -2)[-2:]
+            margin = float(top2.max() - top2.min())
+
         # Hysteresis + debounce for move/rest state.
         if not self._in_move:
             self._off_count = 0
@@ -96,9 +109,9 @@ class IntentStabilizer:
             if self._on_count >= int(self.cfg.move_on_k):
                 self._in_move = True
                 self._on_count = 0
-                # Pick an initial direction immediately (switching is still debounced below).
-                if self._p_dir_ema is not None:
-                    self._dir_current = int(np.argmax(self._p_dir_ema))
+                # Pick an initial direction immediately (switching/release are handled below).
+                if best_idx is not None:
+                    self._dir_current = int(best_idx)
         else:
             self._on_count = 0
             if float(self._p_move_ema) <= float(self.cfg.p_move_off):
@@ -112,22 +125,33 @@ class IntentStabilizer:
                 self._dir_candidate = None
                 self._dir_count = 0
                 self._dir_current = None
+                self._dir_off_count = 0
 
         if not self._in_move:
             return Action.STOP
 
+        # If direction confidence collapses, clear the direction to STOP until it restabilizes.
+        if best_idx is not None:
+            if best_conf < float(self.cfg.p_dir_off) or margin < float(self.cfg.dir_margin):
+                self._dir_off_count += 1
+            else:
+                self._dir_off_count = 0
+            if self._dir_off_count >= int(self.cfg.dir_off_k):
+                self._dir_current = None
+                self._dir_candidate = None
+                self._dir_count = 0
+                return Action.STOP
+
         # Direction debounce (only when in MOVE and p_dir available).
-        if self._p_dir_ema is not None:
-            idx = int(np.argmax(self._p_dir_ema))
-            conf = float(self._p_dir_ema[idx])
-            if conf >= float(self.cfg.p_dir):
-                if self._dir_candidate == idx:
+        if best_idx is not None:
+            if best_conf >= float(self.cfg.p_dir) and margin >= float(self.cfg.dir_margin):
+                if self._dir_candidate == int(best_idx):
                     self._dir_count += 1
                 else:
-                    self._dir_candidate = idx
+                    self._dir_candidate = int(best_idx)
                     self._dir_count = 1
                 if self._dir_count >= int(self.cfg.dir_k):
-                    self._dir_current = idx
+                    self._dir_current = int(best_idx)
             else:
                 # Low confidence: do not switch.
                 self._dir_candidate = None

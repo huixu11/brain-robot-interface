@@ -192,6 +192,8 @@ Baseline correction（BCI 常用做法，提升稳定性）：
 - Move 的滞后阈值：`p_move_on` 与 `p_move_off`
 - 连续窗口去抖：进入/退出 move 需要连续 K 次满足
 - 方向切换去抖：方向 top-1 需要连续 K 次且 `>= p_dir` 才切换
+- 方向置信度“峰值差值”约束：`top1 - top2 >= dir_margin` 才允许执行非 STOP（降低 rest 期间误触发）
+- 方向 release：当方向置信度持续低于阈值（`p_dir_off` 或 `dir_margin`）达到 `dir_off_k` 次，输出 STOP 直到重新稳定
 
 状态机状态：
 - REST

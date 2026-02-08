@@ -44,7 +44,10 @@ def main() -> None:
     ap.add_argument("--move-on-k", type=int, default=3)
     ap.add_argument("--move-off-k", type=int, default=3)
     ap.add_argument("--p-dir", type=float, default=0.4)
+    ap.add_argument("--p-dir-off", type=float, default=0.35)
     ap.add_argument("--dir-k", type=int, default=3)
+    ap.add_argument("--dir-off-k", type=int, default=8)
+    ap.add_argument("--dir-margin", type=float, default=0.05)
     args = ap.parse_args()
 
     path = Path(args.npz) if args.npz else _default_npz_path()
@@ -87,7 +90,10 @@ def main() -> None:
                 move_on_k=int(args.move_on_k),
                 move_off_k=int(args.move_off_k),
                 p_dir=float(args.p_dir),
+                p_dir_off=float(args.p_dir_off),
                 dir_k=int(args.dir_k),
+                dir_off_k=int(args.dir_off_k),
+                dir_margin=float(args.dir_margin),
             )
         )
         if model.baseline == "pre_cue":
