@@ -185,6 +185,8 @@ Baseline correction（BCI 常用做法，提升稳定性）：
 
 稳定器实现为独立模块，输入为模型概率输出，输出为最终离散 Action。
 
+代码实现：`src/thoughtlink/stability.py`（`IntentStabilizer` + `StabilityConfig`）。
+
 机制组合（赛题点名的阈值/去抖/滞后/平滑）：
 - EWMA 概率平滑
 - Move 的滞后阈值：`p_move_on` 与 `p_move_off`

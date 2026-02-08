@@ -4,11 +4,13 @@ from .data import (
     Chunk,
     ChunkMeta,
     EegWindow,
+    SessionSplitConfig,
     Split,
     SplitConfig,
     WindowConfig,
     iter_eeg_windows,
     load_chunk,
+    split_by_session,
     split_by_subject,
 )
 from .labels import CanonicalCue, cue_to_action, normalize_cue_label
@@ -23,6 +25,7 @@ from .linear import (
 )
 from .metrics import accuracy, confusion_matrix
 from .intent_model import DIR_LABELS, IntentModel
+from .stability import IntentStabilizer, StabilityConfig
 
 __all__ = [
     "CanonicalCue",
@@ -31,11 +34,13 @@ __all__ = [
     "Chunk",
     "ChunkMeta",
     "EegWindow",
+    "SessionSplitConfig",
     "Split",
     "SplitConfig",
     "WindowConfig",
     "iter_eeg_windows",
     "load_chunk",
+    "split_by_session",
     "split_by_subject",
     "eeg_window_features",
     "BinaryLogReg",
@@ -48,4 +53,6 @@ __all__ = [
     "confusion_matrix",
     "DIR_LABELS",
     "IntentModel",
+    "StabilityConfig",
+    "IntentStabilizer",
 ]
