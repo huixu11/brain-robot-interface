@@ -297,6 +297,7 @@ Bonus（赛题加分项）
 - 新增 `src/thoughtlink/*`：数据读取/滑窗/特征/模型/稳定器（只负责“脑信号 -> Action”）  
 - 新增 `examples/train_intent.py`：离线训练与评估（输出模型与配置）  
 - 新增 `examples/intent_policy.py`：execution & testing script（模型预测 -> 稳定器 -> `Controller.set_action` -> MuJoCo 仿真）  
+- 新增 `examples/eval_closed_loop.py`：批量闭环指标评测（不启动 MuJoCo，用于在 test split 上汇总 `false_rate/onset_latency` 等）  
 
 建议的实现里程碑（便于在现有仓库上逐步验证，而不是一次性大改）：  
 1. 先只实现 `Action.BACKWARD` 并在仿真里验证负 `vx` 的行为（例如新增一个非交互脚本 `examples/action_sequence.py` 顺序执行 FORWARD/BACKWARD/LEFT/RIGHT/STOP）。  
