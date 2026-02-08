@@ -173,6 +173,10 @@ Stage 2：Direction（Left/Right/Forward/Backward）
 - EEG 时域能量特征：每通道去 DC 后的 `log-variance`（对跨 session/subject 更稳）
 - EEG 频域近似：rFFT bins 估计 theta/alpha(beta) bandpower，并取 `log-bandpower` + `relative bandpower`（不依赖 SciPy）
 
+Baseline correction（BCI 常用做法，提升稳定性）：
+- 每个 chunk 使用已知 rest 段 `t=0..(cue_start-guard)` 计算一次 baseline 特征向量
+- 每个滑窗特征做 `feat_delta = feat_window - feat_baseline`，减少跨 session 的幅度尺度漂移
+
 部署与推理：
 - baseline 训练/推理优先使用 Numpy 线性模型（矩阵乘法，低延迟，依赖最小）
 - 可选：如需统一部署形式，可将线性模型导出 ONNX 并用 `onnxruntime` 推理（与 `src/bri/backends/sim.py` 的 onnx 使用方式一致）

@@ -43,14 +43,28 @@ class Dataset:
     y_dir: np.ndarray  # (n,) -1 for rest else 0..3
 
 
-def build_dataset(chunks: list, win_cfg: WindowConfig, *, include_fft: bool) -> Dataset:
+def build_dataset(chunks: list, win_cfg: WindowConfig, *, include_fft: bool, baseline: str) -> Dataset:
     feats: list[np.ndarray] = []
     y_move: list[int] = []
     y_dir: list[int] = []
 
     for chunk in chunks:
+        base_feat: np.ndarray | None = None
+        if baseline == "pre_cue":
+            # Per-chunk baseline correction using the known rest period t=0..cue_start.
+            # This is common in BCI pipelines and improves robustness across sessions.
+            base_end = int(round((win_cfg.cue_start_s - win_cfg.guard_s) * win_cfg.fs_hz))
+            base_end = max(base_end, int(round(win_cfg.window_s * win_cfg.fs_hz)))
+            base_end = min(base_end, int(chunk.eeg.shape[0]))
+            if base_end > 0:
+                base_feat = eeg_window_features(
+                    chunk.eeg[:base_end], fs_hz=win_cfg.fs_hz, include_fft=include_fft
+                ).astype(np.float32)
+
         for w in iter_eeg_windows(chunk, win_cfg):
             f = eeg_window_features(w.x, fs_hz=win_cfg.fs_hz, include_fft=include_fft)
+            if base_feat is not None and base_feat.shape == f.shape:
+                f = (f - base_feat).astype(np.float32, copy=False)
             feats.append(f)
             y_move.append(1 if w.is_move else 0)
             if w.is_move:
@@ -122,6 +136,13 @@ def main() -> None:
     ap.add_argument("--cue-start-s", type=float, default=3.0)
     ap.add_argument("--fs-hz", type=float, default=500.0)
     ap.add_argument("--no-fft", action="store_true", help="Use only time-domain features (faster).")
+    ap.add_argument(
+        "--baseline",
+        type=str,
+        default="pre_cue",
+        choices=["none", "pre_cue"],
+        help="Feature baseline correction mode (per chunk). 'pre_cue' subtracts t=0..cue_start features.",
+    )
 
     ap.add_argument("--val-subjects", type=int, default=1)
     ap.add_argument("--test-subjects", type=int, default=1)
@@ -218,13 +239,15 @@ def main() -> None:
         cue_start_s=float(args.cue_start_s),
     )
     include_fft = not bool(args.no_fft)
+    baseline = str(args.baseline)
     print(
-        f"[train] window: fs={win_cfg.fs_hz} window_s={win_cfg.window_s} hop_s={win_cfg.hop_s} guard_s={win_cfg.guard_s} include_fft={include_fft}"
+        f"[train] window: fs={win_cfg.fs_hz} window_s={win_cfg.window_s} hop_s={win_cfg.hop_s} guard_s={win_cfg.guard_s} "
+        f"include_fft={include_fft} baseline={baseline}"
     )
 
-    ds_train = build_dataset(split.train, win_cfg, include_fft=include_fft)
-    ds_val = build_dataset(split.val, win_cfg, include_fft=include_fft) if split.val else None
-    ds_test = build_dataset(split.test, win_cfg, include_fft=include_fft) if split.test else None
+    ds_train = build_dataset(split.train, win_cfg, include_fft=include_fft, baseline=baseline)
+    ds_val = build_dataset(split.val, win_cfg, include_fft=include_fft, baseline=baseline) if split.val else None
+    ds_test = build_dataset(split.test, win_cfg, include_fft=include_fft, baseline=baseline) if split.test else None
     if ds_val is None:
         print("[train] WARNING: empty val split; val metrics will be skipped.")
     if ds_test is None:
@@ -309,6 +332,7 @@ def main() -> None:
         hop_s=win_cfg.hop_s,
         guard_s=win_cfg.guard_s,
         cue_start_s=win_cfg.cue_start_s,
+        baseline=baseline,
     )
     out = Path(args.out)
     model.save_npz(out)

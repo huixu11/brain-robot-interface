@@ -21,6 +21,7 @@ class IntentModel:
     hop_s: float
     guard_s: float
     cue_start_s: float
+    baseline: str = "none"
 
     def predict_move_proba(self, x: np.ndarray) -> np.ndarray:
         return self.stage1.predict_proba(self.scaler.transform(x))
@@ -52,6 +53,7 @@ class IntentModel:
             hop_s=np.array([self.hop_s], dtype=np.float32),
             guard_s=np.array([self.guard_s], dtype=np.float32),
             cue_start_s=np.array([self.cue_start_s], dtype=np.float32),
+            baseline=np.array([self.baseline], dtype=object),
             dir_labels=np.array(DIR_LABELS, dtype=object),
         )
 
@@ -61,6 +63,9 @@ class IntentModel:
         scaler = StandardScaler(mean=arr["scaler_mean"], std=arr["scaler_std"])
         stage1 = BinaryLogReg(w=arr["stage1_w"], b=float(arr["stage1_b"][0]))
         stage2 = SoftmaxReg(w=arr["stage2_w"], b=arr["stage2_b"])
+        baseline = "none"
+        if "baseline" in getattr(arr, "files", []):
+            baseline = str(arr["baseline"][0])
         return cls(
             scaler=scaler,
             stage1=stage1,
@@ -70,5 +75,5 @@ class IntentModel:
             hop_s=float(arr["hop_s"][0]),
             guard_s=float(arr["guard_s"][0]),
             cue_start_s=float(arr["cue_start_s"][0]),
+            baseline=baseline,
         )
-
