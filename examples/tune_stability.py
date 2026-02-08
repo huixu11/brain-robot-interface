@@ -469,6 +469,40 @@ def _sample_cfg(rng: np.random.Generator, *, allow_hold_dir: bool) -> StabilityC
     )
 
 
+def _seed_candidates() -> list[StabilityConfig]:
+    # Include a few deterministic starting points so the tuner never returns a degenerate
+    # "all STOP" solution just due to unlucky random sampling.
+    return [
+        StabilityConfig(),  # current defaults used by eval_closed_loop.py / intent_policy.py
+        StabilityConfig(
+            ewma_alpha=0.3,
+            p_move_on=0.55,
+            p_move_off=0.45,
+            move_on_k=2,
+            move_off_k=3,
+            p_dir=0.35,
+            p_dir_off=0.25,
+            dir_k=3,
+            dir_off_k=2,
+            dir_margin=0.03,
+            stop_on_dir_uncertain=True,
+        ),
+        StabilityConfig(
+            ewma_alpha=0.15,
+            p_move_on=0.68,
+            p_move_off=0.50,
+            move_on_k=5,
+            move_off_k=3,
+            p_dir=0.40,
+            p_dir_off=0.35,
+            dir_k=5,
+            dir_off_k=2,
+            dir_margin=0.06,
+            stop_on_dir_uncertain=True,
+        ),
+    ]
+
+
 def _cfg_to_args(cfg: StabilityConfig) -> str:
     # Emit args compatible with eval_closed_loop.py / intent_policy.py.
     args = [
@@ -591,7 +625,8 @@ def main() -> None:
     top: list[tuple[tuple, StabilityConfig, Summary, Summary | None]] = []
 
     def _score(val_s: Summary, test_s: Summary | None) -> tuple:
-        # Lexicographic: (constraint_ok, false, coverage, switches, onset_p95)
+        # Lexicographic: primarily satisfy false-trigger target, then maximize coverage,
+        # while discouraging degenerate "never trigger" configs via trigger_penalty.
         target = float(args.target_false_rate)
         if str(args.objective) == "robust" and test_s is not None:
             false = max(val_s.false_rate_global, test_s.false_rate_global)
@@ -603,15 +638,25 @@ def main() -> None:
             cov = val_s.move_coverage_global
             switches = val_s.switches_per_min_mean
             onset = val_s.onset_latency_p95 or 99.0
-        constraint_ok = (false <= target) and (val_s.trigger_rate >= float(args.min_trigger_rate)) and (val_s.move_coverage_global >= float(args.min_move_coverage))
-        # Smaller is better in tuple; invert coverage so higher is better.
-        return (0 if constraint_ok else 1, false, -cov, switches, onset)
 
-    for i in range(int(args.max_evals)):
-        cfg = _sample_cfg(rng, allow_hold_dir=bool(args.allow_hold_dir))
+        false_penalty = max(0.0, float(false) - target)
+        trig_penalty = max(0.0, float(args.min_trigger_rate) - float(val_s.trigger_rate))
+        cov_penalty = max(0.0, float(args.min_move_coverage) - float(val_s.move_coverage_global))
+
+        # Smaller is better; invert coverage so higher coverage sorts earlier.
+        return (false_penalty, trig_penalty, cov_penalty, -float(cov), float(switches), float(onset))
+
+    objective = str(args.objective)
+
+    candidates: list[StabilityConfig] = []
+    candidates.extend(_seed_candidates())
+    for _ in range(int(args.max_evals)):
+        candidates.append(_sample_cfg(rng, allow_hold_dir=bool(args.allow_hold_dir)))
+
+    for i, cfg in enumerate(candidates):
         val_s = eval_pre_chunks(pre_tune, times=times, cue_start_s=cue_start_s, cfg=cfg)
         test_s: Summary | None = None
-        if pre_report is not None:
+        if pre_report is not None and objective == "robust":
             test_s = eval_pre_chunks(pre_report, times=times, cue_start_s=cue_start_s, cfg=cfg)
         sc = _score(val_s, test_s)
 
@@ -634,6 +679,10 @@ def main() -> None:
     assert best_cfg is not None
     print("[tune] best_cfg (copy/paste into eval_closed_loop.py / intent_policy.py):")
     print(_cfg_to_args(best_cfg))
+
+    if pre_report is not None and objective != "robust":
+        best_test = eval_pre_chunks(pre_report, times=times, cue_start_s=cue_start_s, cfg=best_cfg)
+        _print_summary("test", best_test)
 
     # Print reproducible eval commands.
     base_parts: list[str] = [f"python examples\\eval_closed_loop.py --split {split_kind}"]
