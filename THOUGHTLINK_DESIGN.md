@@ -759,3 +759,53 @@ python examples\eval_closed_loop.py --split all --subset all --subject-id <SUBJE
 - 用 oracle + 模型并排 demo（oracle 证明闭环链路，模型展示现实噪声与改进方向）
 - 用 `eval_closed_loop.py` 报告你的 best-effort 指标，并明确 failure mode（例如某个 eval session no-trigger）与下一步（`feature-mode-move delta`、Stage1 权重、cross-session 轮换）
 - 强调推理速度与可扩展的系统结构：解码器与稳定器开销极小，fan-out 本质是消息分发与安全策略问题
+
+### 9.5 Hackathon 现在应该怎么做（建议按 60 分钟 timebox）
+
+如果你现在只想“尽快做出一个可演示的闭环”，建议按下面的 timebox 执行，并在每个阶段用 stop criteria 决定是否继续深挖或 pivot：
+
+1) 10 分钟：选一个“更容易调参”的目标 subject
+- 推荐优先选 session 数 >= 4 的 subject（因为可以更稳健地留出 eval，同时在剩余 session 内做调参 sanity check）。
+- 如果你坚持用 `a5136953`（只有 3 个 session），那就必须遵循 `6.10.3` 的流程：不要在 eval 上调参，并准备做 3 折轮换避免偶然。
+
+2) 20 分钟：训练一个可用的模型（ELLA 优先，跑不通再回退 baseline）
+- ELLA（推荐，利用多用户数据 + 目标用户少量校准）：
+```powershell
+python examples\train_ella_intent.py `
+  --target-subject <SUBJECT_ID> `
+  --eval-sessions 1 --calib-sessions 0 `
+  --basis-task session `
+  --baseline pre_cue `
+  --feature-mode-move delta
+```
+- 如果 ELLA 在 eval 上长期 no-trigger 或 false 爆炸：先别卡死在 ELLA，直接回退到单用户 baseline（`examples/train_intent.py` 的 session split），先把 demo 跑出来，再在答辩里说“ELLA 是加分方向/未来工作”。
+
+3) 20 分钟：只用 calib sessions 自动搜稳定器参数（避免退化解）
+- 目标：在 `target_false_rate <= 0.05` 的硬约束下，找到 `move_coverage` 不是 0 的 Pareto 点。
+```powershell
+python examples\tune_stability.py `
+  --split session --subject-id <SUBJECT_ID> `
+  --model artifacts\intent_ella_<SUBJECT_ID>.npz `
+  --update-hz 50 `
+  --target-false-rate 0.05 `
+  --min-move-coverage 0.15 --min-trigger-rate 0.6 `
+  --max-evals 800 --objective robust
+```
+
+4) 10 分钟：在 held-out eval session 上复核并锁定“最终 demo 配置”
+- 满足 `9.1` 的 stop criteria 就停止继续调参，直接准备现场 demo：
+```powershell
+python examples\eval_closed_loop.py `
+  --split all --subset all `
+  --subject-id <SUBJECT_ID> --session-id <EVAL_SESSION_ID> `
+  --mode model --model artifacts\intent_ella_<SUBJECT_ID>.npz `
+  --update-hz 50 `
+  <粘贴 best_cfg>
+```
+
+5) 现场演示
+- 先跑 oracle（证明闭环链路没问题），再跑 model（展示真实解码 + 稳定器 + tradeoff）：
+```powershell
+python examples\intent_policy.py --mode oracle --backend sim --speed 5 --update-hz 50
+python examples\intent_policy.py --mode model --model artifacts\intent_ella_<SUBJECT_ID>.npz --backend sim --speed 5 --update-hz 50 <同一套 best_cfg 参数>
+```
