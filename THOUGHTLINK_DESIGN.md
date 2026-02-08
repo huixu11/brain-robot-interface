@@ -219,6 +219,10 @@ Baseline correction（BCI 常用做法，提升稳定性）：
 4. 调用 `ctrl.set_action(action)` 驱动仿真
 5. 记录日志以量化 latency/stability/false triggers
 
+实现接口（便于评测与复现）：
+- `--mode oracle|model`
+- `--model artifacts/intent_*.npz`（`examples/train_intent.py` 输出）
+
 说明：`examples/minimal_policy.py` 使用 `termios/tty`，在 Windows 环境不可用；`examples/intent_policy.py` 设计为不依赖这些交互库。
 
 ### 6.8 Evaluation Criteria（严格对齐 `Requirement_doc.md` 第 6 节）

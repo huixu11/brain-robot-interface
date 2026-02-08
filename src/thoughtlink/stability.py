@@ -19,7 +19,7 @@ class StabilityConfig:
     p_move_off: float = 0.4
     move_on_k: int = 3
     move_off_k: int = 3
-    p_dir: float = 0.5
+    p_dir: float = 0.4
     dir_k: int = 3
 
 
@@ -96,6 +96,9 @@ class IntentStabilizer:
             if self._on_count >= int(self.cfg.move_on_k):
                 self._in_move = True
                 self._on_count = 0
+                # Pick an initial direction immediately (switching is still debounced below).
+                if self._p_dir_ema is not None:
+                    self._dir_current = int(np.argmax(self._p_dir_ema))
         else:
             self._on_count = 0
             if float(self._p_move_ema) <= float(self.cfg.p_move_off):
@@ -134,4 +137,3 @@ class IntentStabilizer:
         if self._dir_current is None:
             return Action.STOP
         return self._idx_to_action(self._dir_current)
-
