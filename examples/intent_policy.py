@@ -45,9 +45,9 @@ def main() -> None:
     ap.add_argument("--move-off-k", type=int, default=3)
     ap.add_argument("--p-dir", type=float, default=0.4)
     ap.add_argument("--p-dir-off", type=float, default=0.35)
-    ap.add_argument("--dir-k", type=int, default=3)
-    ap.add_argument("--dir-off-k", type=int, default=8)
-    ap.add_argument("--dir-margin", type=float, default=0.05)
+    ap.add_argument("--dir-k", type=int, default=5)
+    ap.add_argument("--dir-off-k", type=int, default=2)
+    ap.add_argument("--dir-margin", type=float, default=0.06)
     args = ap.parse_args()
 
     path = Path(args.npz) if args.npz else _default_npz_path()

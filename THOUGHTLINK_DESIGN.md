@@ -195,6 +195,9 @@ Baseline correction（BCI 常用做法，提升稳定性）：
 - 方向置信度“峰值差值”约束：`top1 - top2 >= dir_margin` 才允许执行非 STOP（降低 rest 期间误触发）
 - 方向 release：当方向置信度持续低于阈值（`p_dir_off` 或 `dir_margin`）达到 `dir_off_k` 次，输出 STOP 直到重新稳定
 
+推荐 demo 参数（优先降低 `false_rate`，再考虑压低 `onset_latency`）：
+- `dir_k=5`, `dir_off_k=2`, `dir_margin=0.06`
+
 状态机状态：
 - REST
 - MOVE_LEFT

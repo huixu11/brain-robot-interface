@@ -21,9 +21,9 @@ class StabilityConfig:
     move_off_k: int = 3
     p_dir: float = 0.4
     p_dir_off: float = 0.35
-    dir_k: int = 3
-    dir_off_k: int = 8
-    dir_margin: float = 0.05
+    dir_k: int = 5
+    dir_off_k: int = 2
+    dir_margin: float = 0.06
 
 
 class IntentStabilizer:
