@@ -313,6 +313,18 @@ def main() -> None:
     )
 
     ap.add_argument("--print-every", type=int, default=0, help="If >0, print per-chunk metrics every N chunks.")
+    ap.add_argument(
+        "--top-k",
+        type=int,
+        default=0,
+        help="If >0, print top-K chunks by move_coverage (filtered by per-chunk false_rate) to help pick a demo chunk for intent_policy.py.",
+    )
+    ap.add_argument(
+        "--top-max-false-rate",
+        type=float,
+        default=0.05,
+        help="When printing --top-k chunks, only include chunks with false_rate <= this threshold.",
+    )
     args = ap.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -437,6 +449,7 @@ def main() -> None:
     n_no_release = 0
 
     infer_ms_all: list[np.ndarray] = []
+    all_chunk_metrics: list[ChunkMetrics] = []
 
     t0 = time.perf_counter()
     for i, c in enumerate(eval_chunks):
@@ -501,10 +514,12 @@ def main() -> None:
         if inf_ms.size:
             infer_ms_all.append(inf_ms)
 
+        all_chunk_metrics.append(m)
+
         pe = int(args.print_every)
         if pe > 0 and ((i + 1) % pe == 0 or (i + 1) == len(eval_chunks)):
             print(
-                f"[eval] i={i+1:04d}/{len(eval_chunks)} cue={m.cue} "
+                f"[eval] i={i+1:04d}/{len(eval_chunks)} file={m.path.name} cue={m.cue} "
                 f"false_rate={m.false_rate:.3f} move_coverage={m.move_coverage:.3f} switches_per_min={m.switches_per_min:.1f}"
             )
 
@@ -540,6 +555,30 @@ def main() -> None:
         all_ms = np.concatenate(infer_ms_all, axis=0).astype(np.float32, copy=False)
         p95 = float(np.percentile(all_ms, 95))
         print(f"[eval] inference_ms mean={float(all_ms.mean()):.2f} p95={p95:.2f} n={int(all_ms.size)}")
+
+    top_k = int(args.top_k)
+    if top_k > 0:
+        thr = float(args.top_max_false_rate)
+        # For demo selection, we care about "move" cues where the policy actually triggers and sustains motion.
+        candidates = [
+            m
+            for m in all_chunk_metrics
+            if m.move_total_s > 0 and m.triggered_in_move and m.false_rate <= thr
+        ]
+        candidates.sort(key=lambda m: (m.move_coverage, -m.false_rate), reverse=True)
+        print(f"[eval] top_chunks_by_move_coverage (false_rate <= {thr:.3f}):")
+        if not candidates:
+            print(
+                "[eval] (none) Try relaxing --top-max-false-rate or adjusting stability params to increase trigger_rate/move_coverage."
+            )
+        else:
+            for rank, m in enumerate(candidates[:top_k], start=1):
+                onset = "n/a" if m.onset_latency_s is None else f"{m.onset_latency_s:.3f}"
+                print(
+                    f"[eval] #{rank:02d} file={m.path.name} cue={m.cue} "
+                    f"false_rate={m.false_rate:.3f} move_coverage={m.move_coverage:.3f} "
+                    f"onset_latency_s={onset} switches_per_min={m.switches_per_min:.1f}"
+                )
 
 
 if __name__ == "__main__":

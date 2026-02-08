@@ -723,15 +723,16 @@ Hackathon 时间有限时，建议用“可复现实验 + 现场闭环演示”�
 （重要：`intent_policy.py` 只跑单个 chunk。务必用 `--npz` 选择**同一个 subject/session 的 move chunk**；否则很容易出现“评测里有触发，但 demo 这一个 chunk 刚好是 REST 或来自别的 subject/session，导致机器人不动”。）
 1. Oracle 闭环（证明仿真链路无误）：
 ```powershell
-python examples\intent_policy.py --npz robot_control_data\data\<EVAL_SESSION_ID>-10.npz --mode oracle --backend sim --speed 5 --update-hz 50
+python examples\intent_policy.py --npz robot_control_data\data\<EVAL_SESSION_ID>-10.npz --mode oracle --backend sim --speed 1 --update-hz 50
 ```
 2. Model 闭环（展示真实解码 + 稳定器）：
 ```powershell
-python examples\intent_policy.py --npz robot_control_data\data\<EVAL_SESSION_ID>-10.npz --mode model --model artifacts\intent_ella_<SUBJECT_ID>.npz --backend sim --speed 5 --update-hz 50 <稳定器参数>
+python examples\intent_policy.py --npz robot_control_data\data\<EVAL_SESSION_ID>-10.npz --mode model --model artifacts\intent_ella_<SUBJECT_ID>.npz --backend sim --speed 1 --update-hz 50 <稳定器参数>
 ```
+（可视化提示：如果你用 `--speed 5` 加速回放，且该 chunk 的 `move_coverage` 很低（例如 `0.04`），那么“非 STOP”可能只持续 `0.4s` 左右的模拟时间，折算到真实时间只有 `0.08s`，再叠加速度平滑（`smooth_alpha`），肉眼很容易觉得“机器人没动”。这种情况优先把 `--speed` 调回 `1` 或 `0.5`，并换一个 `move_coverage` 更高的 demo chunk。）
 3. 批量闭环指标（展示不是只挑一个 chunk）：
 ```powershell
-python examples\eval_closed_loop.py --split all --subset all --subject-id <SUBJECT_ID> --session-id <EVAL_SESSION_ID> --mode model --model artifacts\intent_ella_<SUBJECT_ID>.npz --update-hz 50 <稳定器参数>
+python examples\eval_closed_loop.py --split all --subset all --subject-id <SUBJECT_ID> --session-id <EVAL_SESSION_ID> --mode model --model artifacts\intent_ella_<SUBJECT_ID>.npz --update-hz 50 --top-k 5 <稳定器参数>
 ```
 4. 一句话解释指标与赛题点的映射：
 - `false_rate_global` 对应 False Trigger Rate & Confidence Handling
