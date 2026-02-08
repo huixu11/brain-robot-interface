@@ -720,13 +720,14 @@ Hackathon 时间有限时，建议用“可复现实验 + 现场闭环演示”�
 ### 9.2 Demo 流程（3-5 分钟可完成）
 
 推荐用同一个 `.npz` chunk 演示，顺序如下：
+（重要：`intent_policy.py` 只跑单个 chunk。务必用 `--npz` 选择**同一个 subject/session 的 move chunk**；否则很容易出现“评测里有触发，但 demo 这一个 chunk 刚好是 REST 或来自别的 subject/session，导致机器人不动”。）
 1. Oracle 闭环（证明仿真链路无误）：
 ```powershell
-python examples\intent_policy.py --mode oracle --backend sim --speed 5 --update-hz 50
+python examples\intent_policy.py --npz robot_control_data\data\<EVAL_SESSION_ID>-10.npz --mode oracle --backend sim --speed 5 --update-hz 50
 ```
 2. Model 闭环（展示真实解码 + 稳定器）：
 ```powershell
-python examples\intent_policy.py --mode model --model artifacts\intent_ella_<SUBJECT_ID>.npz --backend sim --speed 5 --update-hz 50 <稳定器参数>
+python examples\intent_policy.py --npz robot_control_data\data\<EVAL_SESSION_ID>-10.npz --mode model --model artifacts\intent_ella_<SUBJECT_ID>.npz --backend sim --speed 5 --update-hz 50 <稳定器参数>
 ```
 3. 批量闭环指标（展示不是只挑一个 chunk）：
 ```powershell
@@ -807,8 +808,8 @@ python examples\eval_closed_loop.py `
 5) 现场演示
 - 先跑 oracle（证明闭环链路没问题），再跑 model（展示真实解码 + 稳定器 + tradeoff）：
 ```powershell
-python examples\intent_policy.py --mode oracle --backend sim --speed 5 --update-hz 50
-python examples\intent_policy.py --mode model --model artifacts\intent_ella_<SUBJECT_ID>.npz --backend sim --speed 5 --update-hz 50 <同一套 best_cfg 参数>
+python examples\intent_policy.py --npz robot_control_data\data\<EVAL_SESSION_ID>-10.npz --mode oracle --backend sim --speed 5 --update-hz 50
+python examples\intent_policy.py --npz robot_control_data\data\<EVAL_SESSION_ID>-10.npz --mode model --model artifacts\intent_ella_<SUBJECT_ID>.npz --backend sim --speed 5 --update-hz 50 <同一套 best_cfg 参数>
 ```
 
 ### 9.6 按 `Requirement_doc.md` 的“必做项”对照清单
