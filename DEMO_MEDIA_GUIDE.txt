@@ -33,6 +33,9 @@ Run:
 - Arrange split-screen: MuJoCo viewer on one side, terminal output on the other.
 
 Optional polish (if we add it later)
-- Telemetry overlay is now available in intent_policy.py (OpenCV window):
+- Telemetry overlay is now available in intent_policy.py (GUI window):
   python examples\\intent_policy.py ... --telemetry
   It plots p_move over time, marks the cue window, shows current action, and prints top direction confidence.
+  Notes:
+  - If opencv-python (cv2) is installed, it uses an OpenCV window.
+  - If cv2 is not available (common in Python 3.13 venvs), it falls back to Tkinter automatically.

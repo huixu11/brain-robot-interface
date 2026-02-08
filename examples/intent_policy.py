@@ -12,6 +12,11 @@ try:
 except Exception:  # pragma: no cover
     cv2 = None  # type: ignore
 
+try:
+    import tkinter as tk  # type: ignore
+except Exception:  # pragma: no cover
+    tk = None  # type: ignore
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -145,6 +150,108 @@ class TelemetryOverlay:
             pass
 
 
+class TkTelemetryOverlay:
+    """Tkinter fallback telemetry window (used when OpenCV is unavailable)."""
+
+    def __init__(self, *, title: str = "ThoughtLink Telemetry", width: int = 720, height: int = 220) -> None:
+        if tk is None:
+            raise RuntimeError("Tkinter is not available; cannot show telemetry overlay.")
+        self._w = int(width)
+        self._h = int(height)
+        self._t: list[float] = []
+        self._p: list[float] = []
+
+        self._root = tk.Tk()
+        self._root.title(str(title))
+        self._canvas = tk.Canvas(self._root, width=self._w, height=self._h, bg="#121212", highlightthickness=0)
+        self._canvas.pack()
+        self._root.update_idletasks()
+        self._root.update()
+
+    def _pt(self, *, t: float, p: float, x0: int, y0: int, w: int, h: int) -> tuple[int, int]:
+        t = float(np.clip(t, 0.0, 15.0))
+        p = float(np.clip(p, 0.0, 1.0))
+        x = int(round(x0 + (t / 15.0) * (w - 1)))
+        y = int(round(y0 + (1.0 - p) * (h - 1)))
+        return x, y
+
+    def update(
+        self,
+        *,
+        t_sim: float,
+        p_move: float,
+        action: Action,
+        cue_start_s: float,
+        cue_end_s: float,
+        cfg: StabilityConfig,
+        p_move_raw: float | None = None,
+        p_dir_top: tuple[str, float] | None = None,
+    ) -> None:
+        self._t.append(float(t_sim))
+        self._p.append(float(p_move))
+
+        pad_l, pad_r, pad_t, pad_b = 60, 10, 10, 40
+        x0, y0 = pad_l, pad_t
+        pw = self._w - pad_l - pad_r
+        ph = self._h - pad_t - pad_b
+
+        c = self._canvas
+        c.delete("all")
+
+        # Cue shading.
+        cx0, _ = self._pt(t=float(cue_start_s), p=0.0, x0=x0, y0=y0, w=pw, h=ph)
+        cx1, _ = self._pt(t=float(cue_end_s), p=0.0, x0=x0, y0=y0, w=pw, h=ph)
+        cx0, cx1 = min(cx0, cx1), max(cx0, cx1)
+        if cx1 > cx0:
+            c.create_rectangle(cx0, y0, cx1, y0 + ph, fill="#1c1832", outline="")
+
+        # Axes box.
+        c.create_rectangle(x0, y0, x0 + pw, y0 + ph, outline="#505050", width=1)
+
+        # Threshold lines.
+        for thr, color, label in [
+            (cfg.p_move_on, "#3c8cff", "on"),
+            (cfg.p_move_off, "#ff7a3c", "off"),
+        ]:
+            _, y = self._pt(t=0.0, p=float(thr), x0=x0, y0=y0, w=pw, h=ph)
+            c.create_line(x0, y, x0 + pw, y, fill=color, width=1)
+            c.create_text(x0 + pw - 70, y - 8, text=f"{label}={thr:.2f}", fill=color, font=("Consolas", 8))
+
+        # p_move polyline.
+        pts: list[int] = []
+        for tt, pp in zip(self._t, self._p, strict=False):
+            px, py = self._pt(t=tt, p=pp, x0=x0, y0=y0, w=pw, h=ph)
+            pts.extend([px, py])
+        if len(pts) >= 4:
+            c.create_line(*pts, fill="#50dc78", width=2)
+
+        # Current time marker.
+        x_now, _ = self._pt(t=float(t_sim), p=0.0, x0=x0, y0=y0, w=pw, h=ph)
+        c.create_line(x_now, y0, x_now, y0 + ph, fill="#c8c8c8", width=1)
+
+        # Labels.
+        c.create_text(24, 14, text="p_move", fill="#dddddd", font=("Consolas", 10))
+        c.create_text(22, y0 + ph + 14, text="0.0", fill="#aaaaaa", font=("Consolas", 9))
+        c.create_text(x0 + pw - 18, y0 + ph + 14, text="15s", fill="#aaaaaa", font=("Consolas", 9))
+        c.create_text(22, y0 + 10, text="1.0", fill="#aaaaaa", font=("Consolas", 9))
+
+        p_raw_s = "" if p_move_raw is None else f" raw={p_move_raw:.2f}"
+        dir_s = ""
+        if p_dir_top is not None:
+            dir_s = f" dir={p_dir_top[0]}({p_dir_top[1]:.2f})"
+        footer = f"t={t_sim:5.2f}s  action={action.name:<8}  p_move={p_move:.2f}{p_raw_s}{dir_s}"
+        c.create_text(10, self._h - 12, anchor="w", text=footer, fill="#efefef", font=("Consolas", 9))
+
+        self._root.update_idletasks()
+        self._root.update()
+
+    def close(self) -> None:
+        try:
+            self._root.destroy()
+        except Exception:
+            pass
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="ThoughtLink intent policy (oracle/model) -> bri.Controller (sim).")
     ap.add_argument("--npz", type=str, default=None, help="Path to a dataset .npz chunk (15s).")
@@ -250,10 +357,17 @@ def main() -> None:
 
     overlay: TelemetryOverlay | None = None
     if bool(args.telemetry):
-        if cv2 is None:
-            print("[intent_policy] WARNING: --telemetry requested but opencv-python is not available; disabling telemetry.")
-        else:
+        if cv2 is not None:
             overlay = TelemetryOverlay(width=int(args.telemetry_w), height=int(args.telemetry_h))
+        else:
+            # Many hackathon venvs do not have cv2 wheels available (e.g., Python 3.13).
+            # Use Tkinter so the demo is still recordable without extra installs.
+            print("[intent_policy] INFO: opencv-python not available; using Tkinter telemetry window.")
+            try:
+                overlay = TkTelemetryOverlay(width=int(args.telemetry_w), height=int(args.telemetry_h))
+            except Exception as exc:
+                print(f"[intent_policy] WARNING: telemetry unavailable ({exc}); disabling telemetry.")
+                overlay = None
 
     ctrl = Controller(backend=args.backend, hold_s=float(args.hold_s))
     ctrl.start()
