@@ -579,6 +579,56 @@ Bonus（赛题加分项）
   ```
   - Step 4: 如果仍出现 eval 触发极低，做 cross-session 轮换（3 折）汇总 p50/p95，避免单 session 偶然性；或选 session>=4 的 subject 做更严谨的 `2/1/1` split。
 
+  #### 6.10.3 基于当前跑出来的结果，下一步具体做什么？
+
+  你现在看到的核心矛盾是：为了把 `false_rate_global` 压到 `<=0.05`，稳定器很容易被调到“保守到 eval session 上完全不触发”的区域（`trigger_rate=0 / move_coverage=0`），这在赛题语境下属于不可用解。
+
+  因此下一步的优先级应该是：
+  1) 先保证 eval session 上“能触发且有覆盖”（避免全 STOP）
+  2) 在 1) 的前提下，把 `false_rate_global` 压到 `<=0.05`
+  3) 最后再看 `onset_latency`（更接近 3s 的 cue_start，即 latency 趋近 0）
+
+  推荐执行（严格不泄漏的闭环流程）：
+  1) 训练 ELLA 模型时，Stage 1 也用 delta 特征（对跨 session 更稳）：
+  ```powershell
+  python examples\train_ella_intent.py `
+    --target-subject a5136953 `
+    --eval-sessions 1 --calib-sessions 0 `
+    --basis-task session `
+    --baseline pre_cue `
+    --feature-mode-move delta `
+    --out artifacts\intent_ella_a5136953.npz
+  ```
+  2) 在 calib sessions 上跑 `tune_stability.py` 时加“可用性约束”，避免搜到全 STOP：
+  ```powershell
+  python examples\tune_stability.py `
+    --split session --subject-id a5136953 `
+    --session-id <CALIB_SESSION_1> --session-id <CALIB_SESSION_2> `
+    --val-sessions 1 --test-sessions 1 `
+    --model artifacts\intent_ella_a5136953.npz `
+    --update-hz 50 `
+    --target-false-rate 0.05 `
+    --min-move-coverage 0.15 --min-trigger-rate 0.6 `
+    --max-evals 800 --objective robust
+  ```
+  3) 把 `best_cfg` 固定住，只在 eval session 上复核一次（关键是 `trigger_rate > 0` 且 `move_coverage_global` 不为 0）：
+  ```powershell
+  python examples\eval_closed_loop.py `
+    --split all --subset all `
+    --subject-id a5136953 --session-id <EVAL_SESSION_ID> `
+    --mode model --model artifacts\intent_ella_a5136953.npz `
+    --update-hz 50 `
+    <粘贴 best_cfg>
+  ```
+
+  如果仍然出现 “eval session no-trigger”：
+  - 不要在 eval 上调参（会泄漏），按下面顺序处理：
+    - 提高 `tune_stability.py` 的 `--min-move-coverage/--min-trigger-rate` 约束，让搜索拒绝“低覆盖但 false 很低”的候选。
+    - 回到模型侧提升 Stage 1 的 recall（让 `p(move)` 在 eval session 上能跨过阈值）：
+      - 继续使用 `--feature-mode-move delta`（优先）
+      - 调整 Stage 1 校准的类别权重（`--stage1-w-move/--stage1-w-rest`）与正则（`--stage1-l2`），把输出分布推到更可触发的区间，再用稳定器把 false 压回去
+    - 做 cross-session 轮换（3 折）：每次换一个 session 当 eval，用另两个做 calib 调参，最后汇总 3 个 fold 的 p50/p95（避免单 session 偶然性）。
+
   训练与更新流程（从简单到复杂，逐步加码）：
   1) 先做一个强 baseline：全数据（多用户）训练一个“全局模型”作为初始化，然后对目标用户用少量数据 fine-tune（最简单、最容易实现）。
   2) 再做 low-rank / shared-basis（ELLA 风格）：
