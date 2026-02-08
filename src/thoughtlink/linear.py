@@ -52,6 +52,8 @@ def train_binary_logreg(
     lr: float = 0.1,
     epochs: int = 50,
     l2: float = 1e-3,
+    w_pos: float = 1.0,
+    w_neg: float = 1.0,
     seed: int = 0,
 ) -> BinaryLogReg:
     rng = np.random.default_rng(seed)
@@ -67,10 +69,12 @@ def train_binary_logreg(
     for _ in range(int(epochs)):
         z = x @ w + b
         p = _sigmoid(z)
-        # grad of mean BCE + L2
-        diff = p - y
-        grad_w = (x.T @ diff) / n + (l2 * w)
-        grad_b = np.mean(diff)
+        # grad of weighted mean BCE + L2
+        weights = np.where(y > 0.5, float(w_pos), float(w_neg)).astype(np.float32)
+        denom = float(weights.sum()) if float(weights.sum()) > 0 else float(n)
+        diff = (p - y) * weights
+        grad_w = (x.T @ diff) / denom + (l2 * w)
+        grad_b = float(diff.sum()) / denom
         w = w - (lr * grad_w).astype(np.float32)
         b = np.float32(b - lr * grad_b)
 
@@ -124,4 +128,3 @@ def train_softmax_reg(
         b = b - (lr * grad_b).astype(np.float32)
 
     return SoftmaxReg(w=w, b=b)
-

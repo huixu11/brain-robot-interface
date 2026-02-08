@@ -112,6 +112,8 @@ def eval_chunk_closed_loop(
     mode: str,
     model: IntentModel | None,
     include_fft: bool,
+    feature_mode_move: str,
+    feature_mode_dir: str,
     stabilizer_cfg: StabilityConfig,
 ) -> tuple[ChunkMetrics, np.ndarray]:
     """Evaluate one 15s chunk in a deterministic closed-loop replay.
@@ -191,12 +193,27 @@ def eval_chunk_closed_loop(
                 action = Action.STOP
             else:
                 t_inf0 = time.perf_counter()
-                f = eeg_window_features(eeg[start_i:end], fs_hz=fs, include_fft=include_fft)
-                if base_feat is not None and base_feat.shape == f.shape:
-                    f = (f - base_feat).astype(np.float32, copy=False)
-                x = f.reshape(1, -1).astype(np.float32)
-                p_move = float(model.predict_move_proba(x)[0])
-                p_dir = model.predict_direction_proba(x)[0]
+                f_raw = eeg_window_features(eeg[start_i:end], fs_hz=fs, include_fft=include_fft)
+                f_delta: np.ndarray | None = None
+                if base_feat is not None and base_feat.shape == f_raw.shape:
+                    f_delta = (f_raw - base_feat).astype(np.float32, copy=False)
+                def _select(mode: str) -> np.ndarray:
+                    if mode == "raw":
+                        return f_raw
+                    if mode == "delta":
+                        return f_delta if f_delta is not None else f_raw
+                    if mode == "raw+delta":
+                        if f_delta is None:
+                            return np.concatenate([f_raw, np.zeros_like(f_raw, dtype=np.float32)], axis=0).astype(
+                                np.float32, copy=False
+                            )
+                        return np.concatenate([f_raw, f_delta], axis=0).astype(np.float32, copy=False)
+                    raise ValueError(f"Unknown feature_mode: {mode!r}")
+
+                x_move = _select(feature_mode_move).reshape(1, -1).astype(np.float32, copy=False)
+                x_dir = _select(feature_mode_dir).reshape(1, -1).astype(np.float32, copy=False)
+                p_move = float(model.predict_move_proba(x_move)[0])
+                p_dir = model.predict_direction_proba(x_dir)[0]
                 action = stabilizer.step(p_move=p_move, p_dir=p_dir)
                 infer_ms.append((time.perf_counter() - t_inf0) * 1000.0)
 
@@ -351,9 +368,15 @@ def main() -> None:
 
     model: IntentModel | None = None
     include_fft = True
+    feature_mode = "raw"
+    feature_mode_move = "raw"
+    feature_mode_dir = "raw"
     if str(args.mode) == "model":
         model = IntentModel.load_npz(Path(args.model))
-        include_fft = int(model.stage1.w.shape[0]) > 6
+        include_fft = bool(model.include_fft)
+        feature_mode = str(model.feature_mode)
+        feature_mode_move = str(model.feature_mode_move or model.feature_mode)
+        feature_mode_dir = str(model.feature_mode_dir or model.feature_mode)
 
     stabilizer_cfg = StabilityConfig(
         ewma_alpha=float(args.ewma_alpha),
@@ -375,7 +398,9 @@ def main() -> None:
         print(f"[eval] session_filter={sorted(session_filter)}")
     if model is not None:
         print(
-            f"[eval] model={args.model} feat_dim={int(model.stage1.w.shape[0])} include_fft={include_fft} baseline={model.baseline!r}"
+            f"[eval] model={args.model} feat_dim={int(model.stage1.w.shape[0])} include_fft={include_fft} "
+            f"baseline={model.baseline!r} feature_mode={feature_mode!r} "
+            f"feature_mode_move={feature_mode_move!r} feature_mode_dir={feature_mode_dir!r}"
         )
     print(
         "[eval] stabilizer "
@@ -418,6 +443,8 @@ def main() -> None:
             mode=str(args.mode),
             model=model,
             include_fft=include_fft,
+            feature_mode_move=feature_mode_move,
+            feature_mode_dir=feature_mode_dir,
             stabilizer_cfg=stabilizer_cfg,
         )
         m = ChunkMetrics(
@@ -510,4 +537,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

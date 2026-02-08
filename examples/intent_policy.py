@@ -77,11 +77,17 @@ def main() -> None:
     model: IntentModel | None = None
     stabilizer: IntentStabilizer | None = None
     include_fft = True
+    feature_mode = "raw"
+    feature_mode_move = "raw"
+    feature_mode_dir = "raw"
     base_feat: np.ndarray | None = None
     if str(args.mode) == "model":
         model = IntentModel.load_npz(Path(args.model))
         d = int(model.stage1.w.shape[0])
-        include_fft = d > 6
+        include_fft = bool(model.include_fft)
+        feature_mode = str(model.feature_mode)
+        feature_mode_move = str(model.feature_mode_move or model.feature_mode)
+        feature_mode_dir = str(model.feature_mode_dir or model.feature_mode)
         stabilizer = IntentStabilizer(
             StabilityConfig(
                 ewma_alpha=float(args.ewma_alpha),
@@ -94,7 +100,7 @@ def main() -> None:
                 dir_k=int(args.dir_k),
                 dir_off_k=int(args.dir_off_k),
                 dir_margin=float(args.dir_margin),
-            )
+                )
         )
         if model.baseline == "pre_cue":
             fs = float(model.fs_hz)
@@ -104,7 +110,9 @@ def main() -> None:
             if base_end > 0:
                 base_feat = eeg_window_features(arr["feature_eeg"][:base_end], fs_hz=fs, include_fft=include_fft)
         print(
-            f"[intent_policy] loaded model={args.model} feat_dim={d} include_fft={include_fft} baseline={model.baseline!r}"
+            f"[intent_policy] loaded model={args.model} feat_dim={d} include_fft={include_fft} "
+            f"baseline={model.baseline!r} feature_mode={feature_mode!r} "
+            f"feature_mode_move={feature_mode_move!r} feature_mode_dir={feature_mode_dir!r}"
         )
 
     ctrl = Controller(backend=args.backend, hold_s=float(args.hold_s))
@@ -174,12 +182,28 @@ def main() -> None:
                     action = Action.STOP
                 else:
                     t_inf0 = time.perf_counter()
-                    f = eeg_window_features(eeg[start_i:end], fs_hz=fs, include_fft=include_fft)
-                    if base_feat is not None and base_feat.shape == f.shape:
-                        f = (f - base_feat).astype(np.float32, copy=False)
-                    x = f.reshape(1, -1).astype(np.float32)
-                    p_move = float(model.predict_move_proba(x)[0])
-                    p_dir = model.predict_direction_proba(x)[0]
+                    f_raw = eeg_window_features(eeg[start_i:end], fs_hz=fs, include_fft=include_fft)
+                    f_delta: np.ndarray | None = None
+                    if base_feat is not None and base_feat.shape == f_raw.shape:
+                        f_delta = (f_raw - base_feat).astype(np.float32, copy=False)
+                    def _select(mode: str) -> np.ndarray:
+                        if mode == "raw":
+                            return f_raw
+                        if mode == "delta":
+                            return f_delta if f_delta is not None else f_raw
+                        if mode == "raw+delta":
+                            if f_delta is None:
+                                # Should not happen with baseline='pre_cue', but keep runtime robust.
+                                return np.concatenate([f_raw, np.zeros_like(f_raw, dtype=np.float32)], axis=0).astype(
+                                    np.float32, copy=False
+                                )
+                            return np.concatenate([f_raw, f_delta], axis=0).astype(np.float32, copy=False)
+                        raise ValueError(f"Unknown feature_mode: {mode!r}")
+
+                    x_move = _select(feature_mode_move).reshape(1, -1).astype(np.float32, copy=False)
+                    x_dir = _select(feature_mode_dir).reshape(1, -1).astype(np.float32, copy=False)
+                    p_move = float(model.predict_move_proba(x_move)[0])
+                    p_dir = model.predict_direction_proba(x_dir)[0]
                     action = stabilizer.step(p_move=p_move, p_dir=p_dir)
                     infer_ms.append((time.perf_counter() - t_inf0) * 1000.0)
 
