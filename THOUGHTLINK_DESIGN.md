@@ -273,6 +273,69 @@ False triggers
   - `move_coverage_global = sum(nonstop_move_s) / sum(move_total_s)`
 - `onset_latency` 的定义是 `t_pred_onset - cue_start`（数据 cue_start 固定为 3s），理想值接近 0s。
 
+#### 6.8.1 `false_rate_global` 目标量级（项目 KPI，不是赛题硬门槛）
+
+说明（严格对齐赛题表述）：`Requirement_doc.md` 在 “False Trigger Rate & Confidence Handling” 中要求你显式使用阈值/去抖/滞后等机制抑制误触发，但**没有给出数值型门槛**。因此下面的阈值是本项目为了工程落地与可扩展性讨论而设定的 KPI，用于调参选点与报告 tradeoff，并不声称是赛题强制要求。
+
+建议的两档目标（按 rest 时间加权）：
+- Demo 及格线：`false_rate_global <= 0.05`
+- 更接近“可扩到 100 机器人”的安全量级：`false_rate_global <= 0.01`
+
+为什么需要到 `0.01` 量级：在 one-to-many supervision 设定里，误触发会随机器人数量叠加。若单机器人在 rest 段误动比例为 `f`，则 N 台中“至少一台在误动”的概率上界约为 `1 - (1 - f)^N`。当 `f=0.05, N=100` 时几乎必然发生；当 `f=0.01` 时依然不低，但显著改善。因此最终展示建议至少达到 `<=0.05`，并在讨论可扩展性时展示向 `<=0.01` 收敛的策略与代价。
+
+#### 6.8.2 如何达到上述目标（训练 + 稳定器的闭环调参流程）
+
+关键原则（与赛题一致）：先把误触发压住，再在误触发可控的前提下压延迟/提升覆盖率，并明确展示 tradeoff。
+
+1) 先建立“可信评估集”
+- 不要只看单个 `.npz` chunk（15s）。使用 `examples/eval_closed_loop.py` 在一个 split 的多个 chunks 上汇总 `false_rate_global`，并查看 per-chunk 的 p50/p95。
+- 建议使用 session split 做单用户校准（更贴近真实 BCI 部署），并留出 non-empty val 用于调参：
+
+```powershell
+# 例：单用户 a5136953，按 session 切分，留 1 个 session 做 val，1 个做 test
+python examples\train_intent.py --split session --subject-id a5136953 --val-sessions 1 --test-sessions 1 --out artifacts\intent_user.npz
+
+# 先在 val 上调稳定器参数（下面的 --subset val）
+python examples\eval_closed_loop.py `
+  --split session --subject-id a5136953 --val-sessions 1 --test-sessions 1 --subset val `
+  --mode model --model artifacts\intent_user.npz --update-hz 50
+
+# 选定参数后，只跑一次 test 报最终结果
+python examples\eval_closed_loop.py `
+  --split session --subject-id a5136953 --val-sessions 1 --test-sessions 1 --subset test `
+  --mode model --model artifacts\intent_user.npz --update-hz 50
+```
+
+2) 训练侧先把 Stage 1（move/rest）偏向安全
+- 如果 `false_rate_global` 过高，优先在 Stage 1 加大 REST 权重（减少误触发），再去调稳定器；因为这属于“模型层面减少误触发”，比纯靠阈值更稳健。
+- 本仓库支持：
+  - `--stage1-balance`（按训练集比例自动设权重）
+  - 或手动：`--stage1-w-rest <wR> --stage1-w-move <wM>`（例如 `wR>wM`）
+
+```powershell
+# 例：更重惩罚误触发（REST 侧权重大）
+python examples\train_intent.py --split session --subject-id a5136953 --val-sessions 1 --test-sessions 1 `
+  --stage1-w-rest 2 --stage1-w-move 1 --out artifacts\intent_user_safe.npz
+```
+
+3) 稳定器调参，把 `false_rate_global` 作为硬约束
+- 调参顺序（推荐）：先调 move/rest 再调 direction。
+- Move/rest（主要影响 `false_rate_global` 与 `trigger_rate`）：
+  - 增大 `p_move_on`、增大 `move_on_k`、减小 `ewma_alpha`：更保守，误触发更低，但触发更慢/覆盖更低
+  - 减小 `p_move_on`、减小 `move_on_k`、增大 `ewma_alpha`：更敏感，触发更快/覆盖更高，但误触发更高
+- Direction（主要影响 `switches_per_min`、MOVE 内 STOP 抖动、release 行为）：
+  - 增大 `dir_margin`、增大 `dir_k`：更稳，但可能出现 MOVE 内 STOP 或延迟方向切换
+  - `stop_on_dir_uncertain=True`（默认）：更安全，方向不确定时允许 STOP，通常降低误触发，但可能降低 `move_coverage`
+  - `stop_on_dir_uncertain=False`：更连续，但更容易在 rest 段“拖尾”导致 false triggers（需要配合更强的 move-off 条件）
+
+4) 用批量评估挑一个“满足目标的 Pareto 点”
+- 在 val 上，以 `false_rate_global <= 0.05` 作为硬约束，选择 `move_coverage_global` 更高、`switches_per_min` 更低、`onset_latency_p95` 更小的参数组合。
+- 如果目标是 `<= 0.01`，通常需要更保守的 `p_move_on/move_on_k`，并接受更大的 `onset_latency` 或更低的 `move_coverage`，并在报告中明确 tradeoff。
+
+5) 最后用 `examples/intent_policy.py` 做仿真闭环 demo
+- 先 `--mode oracle` 验证闭环与指标计算
+- 再 `--mode model` 展示真实解码 + 稳定器，并输出 `inference_ms` 与闭环指标
+
 Bonus（赛题加分项）
 - latency-accuracy tradeoff：对 window/hop/K/阈值做系统 ablation
 - failure modes：误触发类别、边界抖动、跨 subject 泛化
