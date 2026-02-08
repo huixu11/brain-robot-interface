@@ -457,6 +457,62 @@ Bonus（赛题加分项）
     - Step C: 把找到的参数固定住，只在 `eval` session 上用 `eval_closed_loop.py --session-id <EVAL>` 汇报最终 `false_rate_global/move_coverage/onset_latency`。
   - 如果目标 subject 有 4 个 session，则更推荐 `train/val/test = 2/1/1`（val 专职调参，test 专职汇报），结论更稳健。
 
+  ELLA 闭环指标没达标时，下一步怎么做（Runbook）
+  - 典型现象：在 held-out `eval` session 上，`false_rate_global > 0.05`（误触发偏高），或 `move_coverage_global` 过低（不触发/不持续）。
+  - 原则（对齐 `Requirement_doc.md`）：先把误触发压住（安全优先），再在不破坏 false_rate 的前提下尽量提高覆盖与降低 latency。
+
+  1) 先只用 calib sessions 自动找稳定器参数（不碰 eval）
+  ```powershell
+  # calib sessions 内部做 val/test，再把最优参数带去 eval session 复核
+  python examples\tune_stability.py `
+    --split session --subject-id <SUBJECT_ID> `
+    --session-id <CALIB_SESSION_1> --session-id <CALIB_SESSION_2> `
+    --val-sessions 1 --test-sessions 1 `
+    --model artifacts\intent_ella_<SUBJECT_ID>.npz `
+    --update-hz 50 `
+    --target-false-rate 0.05 `
+    --min-move-coverage 0.15 --min-trigger-rate 0.6 `
+    --max-evals 500 --objective robust
+  ```
+  - 关键点：`--min-move-coverage/--min-trigger-rate` 用来防止“全程 STOP”这种退化解（false 低但不可用）。
+  - `--objective robust` 会对候选参数在 (val+test) 上更保守，减少只在某一段 session 上碰巧表现好的概率。
+
+  2) 用上一步的 `best_cfg` 去 eval session 做一次最终复核
+  ```powershell
+  python examples\eval_closed_loop.py `
+    --split all --subset all `
+    --subject-id <SUBJECT_ID> --session-id <EVAL_SESSION_ID> `
+    --mode model --model artifacts\intent_ella_<SUBJECT_ID>.npz `
+    --update-hz 50 `
+    <把 tune_stability 打印的 best_cfg 整段粘到这里>
+  ```
+  - 如果 `false_rate_global <= 0.05` 且 `move_coverage_global` 也满足 demo 需要: 这个参数点可作为展示点，并在报告里对比 “更激进的低延迟配置 vs 更保守的低误触发配置”。
+
+  3) 如果 calib 上能达标，但 eval 上“0 触发/覆盖很低”
+  - 这通常说明 “跨 session 漂移” 让 Stage 1 的 `p(move)` 分布整体变低，保守门槛推不过去。
+  - 不建议为了提高覆盖直接在 eval 上调参（会泄漏）。推荐两种不泄漏的解决方案：
+    - 方案 A（推荐，结论更稳）：做 cross-session 轮换（3 折）。每次把 1 个 session 作为 eval，其余 2 个 session 调参，然后汇报 3 个 fold 的 `false_rate_global/move_coverage` 分位数或均值，避免“挑最有利的 session”。
+    - 方案 B（演示优先）：换一个 session 数更多的 subject（>=4 session），严格做 `train/val/test = 2/1/1`，让稳定器搜索更稳健。
+
+  4) 如果怎么调稳定器都压不住误触发（`REST -> MOVE` 太多）
+  - 这是“模型层面”的问题，优先修 Stage 1:
+    - 增加 REST 的训练权重/采样权重（让 Stage 1 偏安全）
+    - 选择更抗漂移的特征与基线策略（例如继续使用 `baseline=pre_cue`，并避免窗口跨 cue 边界的泄漏）
+    - 在 ELLA 的 basis 学习里优先用 `--basis-task session` 来覆盖漂移形态
+  - 只有当 Stage 1 输出靠谱，稳定器的阈值/滞后才不会被迫调到极端保守。
+
+  这个阶段建议 commit 什么（让你每一步都可复现）
+  - 需要 commit：
+    - 代码改动（脚本/模型/稳定器）与 `THOUGHTLINK_DESIGN.md` 的流程与结论更新
+    - 推荐额外加一个小的“实验记录文件”（例如 `reports/ella_<subject>_<eval_session>.md`），记录:
+      - session 划分（eval/calib）
+      - 训练命令（`train_ella_intent.py`）
+      - 调参命令（`tune_stability.py`）与最终采用的 `best_cfg`
+      - eval session 的关键指标（false_rate_global/move_coverage/onset_latency/switches_per_min）
+  - 不建议 commit：
+    - `robot_control_data/`（数据）
+    - `artifacts/*.npz`（模型权重通常较大，建议作为运行产物保存或在提交说明里给出生成命令；如 hackathon 需要交付权重文件，可打包为 release/附件而非 git 版本控制）
+
   训练与更新流程（从简单到复杂，逐步加码）：
   1) 先做一个强 baseline：全数据（多用户）训练一个“全局模型”作为初始化，然后对目标用户用少量数据 fine-tune（最简单、最容易实现）。
   2) 再做 low-rank / shared-basis（ELLA 风格）：
