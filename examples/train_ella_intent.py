@@ -15,7 +15,7 @@ from thoughtlink.data import WindowConfig, iter_eeg_windows, iter_npz_files, loa
 from thoughtlink.ella import svd_basis, train_task_binary_via_basis, train_task_softmax_via_basis
 from thoughtlink.features import eeg_window_features
 from thoughtlink.intent_model import IntentModel
-from thoughtlink.labels import CanonicalCue, normalize_cue_label
+from thoughtlink.labels import CanonicalCue
 from thoughtlink.linear import fit_scaler, train_binary_logreg, train_softmax_reg
 from thoughtlink.metrics import accuracy, confusion_matrix
 
@@ -145,6 +145,13 @@ def main() -> None:
     )
     ap.add_argument("--basis-k-move", type=int, default=8)
     ap.add_argument("--basis-k-dir", type=int, default=8)
+    ap.add_argument(
+        "--basis-task",
+        type=str,
+        default="session",
+        choices=["subject", "session"],
+        help="What constitutes a task for learning the shared basis. 'session' captures drift better (recommended).",
+    )
 
     ap.add_argument("--window-s", type=float, default=0.5)
     ap.add_argument("--hop-s", type=float, default=0.1)
@@ -218,9 +225,22 @@ def main() -> None:
     # Train per-subject models for basis subjects (in the shared scaled space).
     w_move_list: list[np.ndarray] = []
     w_dir_list: list[np.ndarray] = []
-    for sid in basis_subjects:
-        si = subj_id_to_i[sid]
-        m = table.subj == int(si)
+    basis_task = str(args.basis_task)
+    if basis_task == "subject":
+        groups: list[tuple[str, np.ndarray]] = []
+        for sid in basis_subjects:
+            si = subj_id_to_i[sid]
+            groups.append((sid, table.subj == int(si)))
+    else:
+        # Treat each recording session as a separate task (better captures session drift).
+        groups = []
+        for s in sorted(set(table.sess[basis_mask].tolist())):
+            sess_name = table.sess_ids[int(s)]
+            groups.append((sess_name, basis_mask & (table.sess == int(s))))
+
+    print(f"[ella] basis_tasks={len(groups)} basis_task={basis_task!r}")
+
+    for name, m in groups:
         x_m = x_move_sc[m]
         y_m = table.y_move[m]
         stage1 = train_binary_logreg(
