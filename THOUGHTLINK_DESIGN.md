@@ -255,6 +255,14 @@ False triggers
 - `switches_per_min/dir_switches/stop_toggles`（稳定性）
 - `false_nonstop_rest_s/false_rate`（误触发）
 
+批量评测（得到更可信的结论，且便于调参）
+- 单个 `.npz` chunk（15s）的指标只能代表一个样本，不能代表整体。应当在 **test split** 上汇总，并查看分布（p50/p95）而不是只看均值。
+- 本仓库提供 `examples/eval_closed_loop.py`：不启动 MuJoCo，但复现 `intent_policy.py` 的闭环判决逻辑（滑窗 -> 模型 -> 稳定器 -> Action）并对多 chunk 汇总指标。
+- 汇总推荐按时长加权（避免不同 `duration` 的 rest/move 时长差异带来偏差）：
+  - `false_rate_global = sum(false_nonstop_rest_s) / sum(rest_total_s)`
+  - `move_coverage_global = sum(nonstop_move_s) / sum(move_total_s)`
+- `onset_latency` 的定义是 `t_pred_onset - cue_start`（数据 cue_start 固定为 3s），理想值接近 0s。
+
 Bonus（赛题加分项）
 - latency-accuracy tradeoff：对 window/hop/K/阈值做系统 ablation
 - failure modes：误触发类别、边界抖动、跨 subject 泛化
