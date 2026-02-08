@@ -452,9 +452,38 @@ Bonus（赛题加分项）
 - Cross-subject（`split=subject`）：用训练 subjects 学 `L`，对 test subject 用少量校准数据解 `s_u`，再在该 subject 的 held-out sessions 上评估 `false_rate_global/move_coverage/onset_latency`。
 - Cross-session（`split=session`，单用户）：当目标用户 session 少时，用其它用户的数据学 `L`，再用目标用户的 1 个 session 解 `s_u`，在其余 session 上评估（模拟“快速校准 + 适配漂移”）。
 
-落地实现建议（仍保持仓库风格的最小依赖）：
-- 不引入重依赖（PyTorch/TF 不是必须）。字典学习与系数求解可以用 Numpy + 坐标下降/ISTA 的 L1（或先用 L2 作为简化版），并将 `L` 与 `s_u` 打包保存为 `.npz`。
-- 与现有闭环系统无缝对接：ELLA/MTL 只替换 `IntentModel.predict_*` 的参数来源；稳定器 `IntentStabilizer`、评测 `eval_closed_loop.py`、仿真脚本 `intent_policy.py` 的接口不变。
+  落地实现建议（仍保持仓库风格的最小依赖）：
+  - 不引入重依赖（PyTorch/TF 不是必须）。字典学习与系数求解可以用 Numpy + 坐标下降/ISTA 的 L1（或先用 L2 作为简化版），并将 `L` 与 `s_u` 打包保存为 `.npz`。
+  - 与现有闭环系统无缝对接：ELLA/MTL 只替换 `IntentModel.predict_*` 的参数来源；稳定器 `IntentStabilizer`、评测 `eval_closed_loop.py`、仿真脚本 `intent_policy.py` 的接口不变。
+
+  本仓库的最小可运行实现（ELLA-style shared basis）：
+  - 代码位置：
+    - `src/thoughtlink/ella.py`：从多任务权重中提取共享基 `L`（SVD），并在低维系数空间训练/校准，再重构回全维权重（保持推理为点积/矩阵乘）。
+    - `examples/train_ella_intent.py`：用“其它用户”学习 `L_move/L_dir`，再用目标用户的少量 session 做校准，输出标准 `IntentModel .npz`，可直接喂给 `intent_policy.py / eval_closed_loop.py`。
+  - 重要实现细节（针对本数据集的 session 漂移）：
+    - `--basis-task session`（推荐）：把“每个 recording session”当作一个 task 来学基，而不是把整个 subject 当作 1 个 task。原因是本赛题数据的主要难点之一是跨 session 漂移，用 session 作为 task 能显式让 `L` 覆盖更多漂移形态。
+    - `--basis-task subject`：更简单，但 task 数更少，`basis_k` 可能受限，通常不如 session 版本稳健。
+
+  用法示例（先训练 ELLA 模型，再用闭环评测脚本验证指标）：
+  ```powershell
+  # 1) 训练 ELLA-style 模型（输出 artifacts\intent_ella_<subject>.npz）
+  python examples\train_ella_intent.py `
+    --target-subject a5136953 `
+    --eval-sessions 1 --calib-sessions 0 `
+    --basis-task session `
+    --basis-k-move 8 --basis-k-dir 8 `
+    --baseline pre_cue
+  ```
+  `train_ella_intent.py` 会打印 `eval=[...] calib=[...]` 的 session_id 列表。为了避免数据泄漏，闭环评测时只在 `eval` session 上汇总指标：
+  ```powershell
+  # 2) 只评测 held-out 的 eval session（用 session-id 精确筛选）
+  python examples\eval_closed_loop.py `
+    --split all --subset all `
+    --subject-id a5136953 --session-id <EVAL_SESSION_ID> `
+    --mode model --model artifacts\intent_ella_a5136953.npz `
+    --update-hz 50
+  ```
+  之后再按 `6.8.1` 的流程，用 `tune_stability.py` 在非 eval 的数据上自动找稳定器参数，并在 eval session 上复核 `false_rate_global` 是否达标（`<=0.05` 或向 `<=0.01` 收敛）。
 
 ## 7. Why It Matters（对应 `Requirement_doc.md` 第 7 节）
 
@@ -462,13 +491,14 @@ Bonus（赛题加分项）
 
 ## 8. Repo 级改动清单（确保设计可在本仓库落地）
 
-为满足 `Requirement_doc.md` 明确要求的 `left/right/forward/backward` + 稳定性 + 仿真闭环，本设计在“现有代码基础上”做以下增量修改（尽量不破坏现有接口）：  
-- 修改 `src/bri/command/actions.py`：新增 `BACKWARD`（保持枚举兼容，原有动作不变）  
-- 修改 `src/bri/command/action_controller.py`：在 `get_cmd_vel()` 增加 BACKWARD 分支，输出 `CmdVel(vx=-forward_speed, ...)`  
-- 新增 `src/thoughtlink/*`：数据读取/滑窗/特征/模型/稳定器（只负责“脑信号 -> Action”）  
-- 新增 `examples/train_intent.py`：离线训练与评估（输出模型与配置）  
-- 新增 `examples/intent_policy.py`：execution & testing script（模型预测 -> 稳定器 -> `Controller.set_action` -> MuJoCo 仿真）  
-- 新增 `examples/eval_closed_loop.py`：批量闭环指标评测（不启动 MuJoCo，用于在 test split 上汇总 `false_rate/onset_latency` 等）  
+  为满足 `Requirement_doc.md` 明确要求的 `left/right/forward/backward` + 稳定性 + 仿真闭环，本设计在“现有代码基础上”做以下增量修改（尽量不破坏现有接口）：  
+  - 修改 `src/bri/command/actions.py`：新增 `BACKWARD`（保持枚举兼容，原有动作不变）  
+  - 修改 `src/bri/command/action_controller.py`：在 `get_cmd_vel()` 增加 BACKWARD 分支，输出 `CmdVel(vx=-forward_speed, ...)`  
+  - 新增 `src/thoughtlink/*`：数据读取/滑窗/特征/模型/稳定器（只负责“脑信号 -> Action”）  
+  - 新增 `examples/train_intent.py`：离线训练与评估（输出模型与配置）  
+  - 新增 `src/thoughtlink/ella.py` + `examples/train_ella_intent.py`：可选的多用户共享基（ELLA-style）训练与快速校准（不改变闭环接口）  
+  - 新增 `examples/intent_policy.py`：execution & testing script（模型预测 -> 稳定器 -> `Controller.set_action` -> MuJoCo 仿真）  
+  - 新增 `examples/eval_closed_loop.py`：批量闭环指标评测（不启动 MuJoCo，用于在 test split 上汇总 `false_rate/onset_latency` 等）  
 
 建议的实现里程碑（便于在现有仓库上逐步验证，而不是一次性大改）：  
 1. 先只实现 `Action.BACKWARD` 并在仿真里验证负 `vx` 的行为（例如新增一个非交互脚本 `examples/action_sequence.py` 顺序执行 FORWARD/BACKWARD/LEFT/RIGHT/STOP）。  
