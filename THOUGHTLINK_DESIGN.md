@@ -766,6 +766,7 @@ python examples\eval_closed_loop.py --split all --subset all --subject-id <SUBJE
 
 1) 10 分钟：选一个“更容易调参”的目标 subject
 - 推荐优先选 session 数 >= 4 的 subject（因为可以更稳健地留出 eval，同时在剩余 session 内做调参 sanity check）。
+- 当前 `robot_control_data/data` 数据集中，session 数 >= 4 的 subject_id 为：`37dfbd76`、`4c2ea012`、`d696086d`（各 4 个 session）。
 - 如果你坚持用 `a5136953`（只有 3 个 session），那就必须遵循 `6.10.3` 的流程：不要在 eval 上调参，并准备做 3 折轮换避免偶然。
 
 2) 20 分钟：训练一个可用的模型（ELLA 优先，跑不通再回退 baseline）
