@@ -199,7 +199,8 @@ False trigger 训练控制（与赛题第 6 节对齐）：
 - 连续窗口去抖：进入/退出 move 需要连续 K 次满足
 - 方向切换去抖：方向 top-1 需要连续 K 次且 `>= p_dir` 才切换
 - 方向置信度“峰值差值”约束：`top1 - top2 >= dir_margin` 才允许执行非 STOP（降低 rest 期间误触发）
-- 方向 release：当方向置信度持续低于阈值（`p_dir_off` 或 `dir_margin`）达到 `dir_off_k` 次，输出 STOP 直到重新稳定
+- 方向 release（可选）：当方向置信度持续低于阈值（`p_dir_off` 或 `dir_margin`）达到 `dir_off_k` 次，输出 STOP 直到重新稳定
+- `stop_on_dir_uncertain` 开关（默认开启）：若关闭，则在 MOVE 状态下方向不确定时不强制 STOP，而是保持上一方向（降低 STOP 抖动、提高 `move_coverage`，但可能抬高 `false_rate`）
 
 推荐调参流程（优先降低 `false_rate`，再考虑压低 `onset_latency`）：
 - 用 `examples/eval_closed_loop.py` 在 **test split** 上批量评测 `false_rate_global/move_coverage_global/switches_per_min`，避免只看单个 chunk。
