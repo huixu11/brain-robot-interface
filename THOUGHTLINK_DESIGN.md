@@ -244,6 +244,12 @@ False triggers
 - rest 期间被判 move 的比例
 - rest 期间非 STOP 的累计时长
 
+指标落地：`examples/intent_policy.py` 在 `--mode model` 下输出：
+- `inference_ms mean/p95`
+- `onset_latency/release_latency`（端到端 timing）
+- `switches_per_min/dir_switches/stop_toggles`（稳定性）
+- `false_nonstop_rest_s/false_rate`（误触发）
+
 Bonus（赛题加分项）
 - latency-accuracy tradeoff：对 window/hop/K/阈值做系统 ablation
 - failure modes：误触发类别、边界抖动、跨 subject 泛化

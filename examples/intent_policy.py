@@ -68,6 +68,9 @@ def main() -> None:
     print(f"[intent_policy] cue_window_s=[{cue_start_s:.3f}, {cue_end_s:.3f}] duration={duration_s:.3f}")
     print(f"[intent_policy] mode={args.mode}")
 
+    def _overlap_s(a0: float, a1: float, b0: float, b1: float) -> float:
+        return max(0.0, min(a1, b1) - max(a0, b0))
+
     model: IntentModel | None = None
     stabilizer: IntentStabilizer | None = None
     include_fft = True
@@ -113,10 +116,39 @@ def main() -> None:
         last_action: Action | None = None
         infer_ms: list[float] = []
 
+        # Closed-loop metrics (Requirement_doc.md evaluation criteria).
+        t_prev: float | None = None
+        action_prev: Action | None = None
+        action_switches: int = 0
+        dir_switches: int = 0
+        stop_toggles: int = 0
+        pred_nonstop_move_s: float = 0.0
+        pred_nonstop_rest_s: float = 0.0
+        onset_t: float | None = None
+        release_t: float | None = None
+        triggered_in_move: bool = False
+
+        move_start = cue_start_s
+        move_end = cue_end_s if not cue_is_rest(cue) else cue_start_s
+        move_total_s = max(0.0, move_end - move_start)
+        rest_total_s = max(0.0, 15.0 - move_total_s)
+
         while True:
             now = time.perf_counter()
-            t_sim = (now - start) * float(args.speed)
-            if t_sim >= 15.0:
+            t_sim_raw = (now - start) * float(args.speed)
+            t_sim = min(15.0, t_sim_raw)
+
+            # Attribute the elapsed interval to the previously-issued action.
+            if t_prev is not None and action_prev is not None:
+                seg_s = t_sim - t_prev
+                if seg_s > 0:
+                    move_s = _overlap_s(t_prev, t_sim, move_start, move_end)
+                    rest_s = seg_s - move_s
+                    if action_prev != Action.STOP:
+                        pred_nonstop_move_s += move_s
+                        pred_nonstop_rest_s += rest_s
+
+            if t_sim_raw >= 15.0:
                 break
 
             if str(args.mode) == "oracle":
@@ -146,13 +178,28 @@ def main() -> None:
                     infer_ms.append((time.perf_counter() - t_inf0) * 1000.0)
 
             if action != last_action:
+                if last_action is not None:
+                    action_switches += 1
+                    if (last_action == Action.STOP) != (action == Action.STOP):
+                        stop_toggles += 1
+                    if last_action != Action.STOP and action != Action.STOP and last_action != action:
+                        dir_switches += 1
                 if str(args.mode) == "model" and model is not None and stabilizer is not None and infer_ms:
                     print(f"[intent_policy] t={t_sim:6.3f}s action={action} infer_ms={infer_ms[-1]:.2f}")
                 else:
                     print(f"[intent_policy] t={t_sim:6.3f}s action={action}")
                 last_action = action
 
+            if action != Action.STOP and (move_start <= t_sim <= move_end) and not cue_is_rest(cue):
+                triggered_in_move = True
+                if onset_t is None:
+                    onset_t = t_sim
+            if triggered_in_move and release_t is None and (t_sim >= move_end) and action == Action.STOP:
+                release_t = t_sim
+
             ctrl.set_action(action)
+            t_prev = t_sim
+            action_prev = action
 
             if dt <= 0:
                 continue
@@ -172,6 +219,36 @@ def main() -> None:
             print(
                 f"[intent_policy] inference_ms mean={float(arr_ms.mean()):.2f} p95={p95:.2f} n={int(arr_ms.shape[0])}"
             )
+
+        # Report closed-loop metrics (timing/stability/false triggers).
+        if move_total_s > 0 and onset_t is not None:
+            onset_latency = onset_t - move_start
+            onset_s = f"{onset_latency:.3f}s"
+        elif move_total_s > 0:
+            onset_s = "n/a (no-trigger)"
+        else:
+            onset_s = "n/a (no-move cue)"
+
+        if move_total_s > 0 and release_t is not None:
+            release_latency = release_t - move_end
+            release_s = f"{release_latency:.3f}s"
+        elif move_total_s > 0:
+            release_s = "n/a (no-release)"
+        else:
+            release_s = "n/a (no-move cue)"
+
+        switches_per_min = float(action_switches) * 60.0 / 15.0
+        false_rate = (pred_nonstop_rest_s / rest_total_s) if rest_total_s > 0 else 0.0
+        move_cover = (pred_nonstop_move_s / move_total_s) if move_total_s > 0 else 0.0
+
+        print(
+            "[intent_policy] metrics "
+            f"onset_latency={onset_s} release_latency={release_s} "
+            f"switches={action_switches} switches_per_min={switches_per_min:.1f} "
+            f"dir_switches={dir_switches} stop_toggles={stop_toggles} "
+            f"false_nonstop_rest_s={pred_nonstop_rest_s:.3f} false_rate={false_rate:.3f} "
+            f"nonstop_move_s={pred_nonstop_move_s:.3f} move_coverage={move_cover:.3f}"
+        )
         ctrl.stop()
 
 
