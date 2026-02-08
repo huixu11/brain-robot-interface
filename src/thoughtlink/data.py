@@ -173,3 +173,47 @@ def split_by_subject(chunks: list[Chunk], cfg: SplitConfig) -> Split:
     test = [c for c in chunks if c.meta.subject_id in test_sub]
 
     return Split(train=train, val=val, test=test)
+
+
+@dataclass(frozen=True)
+class SessionSplitConfig:
+    """Split chunks by session_id.
+
+    This is useful for realistic per-user calibration: train/val/test all come from the
+    same subject(s), but different recording sessions.
+    """
+
+    val_sessions: int = 1
+    test_sessions: int = 1
+    seed: int = 0
+
+
+def split_by_session(chunks: list[Chunk], cfg: SessionSplitConfig) -> Split:
+    """Split chunks by session_id (to avoid leaking within the same recording)."""
+
+    sessions = sorted({c.meta.session_id for c in chunks})
+    rng = np.random.default_rng(cfg.seed)
+    perm = list(sessions)
+    rng.shuffle(perm)
+
+    n = len(perm)
+    if n < 2:
+        raise ValueError("Not enough sessions to split (need at least 2)")
+
+    n_test = max(0, int(cfg.test_sessions))
+    # Ensure at least 1 session remains for training.
+    n_test = min(n_test, n - 1)
+
+    n_val = max(0, int(cfg.val_sessions))
+    # Ensure at least 1 session remains for training after val+test.
+    n_val = min(n_val, n - n_test - 1)
+
+    test_sess = set(perm[:n_test])
+    val_sess = set(perm[n_test : n_test + n_val])
+    train_sess = set(perm[n_test + n_val :])
+
+    train = [c for c in chunks if c.meta.session_id in train_sess]
+    val = [c for c in chunks if c.meta.session_id in val_sess]
+    test = [c for c in chunks if c.meta.session_id in test_sess]
+
+    return Split(train=train, val=val, test=test)

@@ -11,7 +11,16 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from thoughtlink.data import SplitConfig, WindowConfig, iter_eeg_windows, iter_npz_files, load_chunk, split_by_subject
+from thoughtlink.data import (
+    SessionSplitConfig,
+    SplitConfig,
+    WindowConfig,
+    iter_eeg_windows,
+    iter_npz_files,
+    load_chunk,
+    split_by_session,
+    split_by_subject,
+)
 from thoughtlink.features import eeg_window_features
 from thoughtlink.intent_model import IntentModel
 from thoughtlink.labels import CanonicalCue
@@ -87,6 +96,25 @@ def main() -> None:
     ap.add_argument("--data-dir", type=str, default=str(ROOT / "robot_control_data" / "data"))
     ap.add_argument("--max-chunks", type=int, default=0, help="If >0, only load first N chunks (for quick tests).")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument(
+        "--split",
+        type=str,
+        default="subject",
+        choices=["subject", "session", "chunk"],
+        help="How to split train/val/test. Use 'session' for per-user calibration.",
+    )
+    ap.add_argument(
+        "--subject-id",
+        action="append",
+        default=[],
+        help="Filter dataset to subject_id (repeatable, or comma-separated).",
+    )
+    ap.add_argument(
+        "--session-id",
+        action="append",
+        default=[],
+        help="Filter dataset to session_id (repeatable, or comma-separated).",
+    )
 
     ap.add_argument("--window-s", type=float, default=0.5)
     ap.add_argument("--hop-s", type=float, default=0.1)
@@ -97,6 +125,8 @@ def main() -> None:
 
     ap.add_argument("--val-subjects", type=int, default=1)
     ap.add_argument("--test-subjects", type=int, default=1)
+    ap.add_argument("--val-sessions", type=int, default=1)
+    ap.add_argument("--test-sessions", type=int, default=1)
 
     ap.add_argument("--stage1-epochs", type=int, default=50)
     ap.add_argument("--stage1-lr", type=float, default=0.1)
@@ -120,21 +150,61 @@ def main() -> None:
     print(f"[train] chunks={len(paths)} data_dir={data_dir}")
     t0 = time.perf_counter()
     chunks = [load_chunk(p) for p in paths]
-    subjects = sorted({c.meta.subject_id for c in chunks})
-    print(f"[train] subjects={len(subjects)} {subjects}")
 
-    try:
-        split = split_by_subject(
-            chunks,
-            SplitConfig(
-                val_subjects=int(args.val_subjects),
-                test_subjects=int(args.test_subjects),
-                seed=int(args.seed),
-            ),
-        )
-    except ValueError as exc:
-        # Useful when running a quick smoke with --max-chunks that only contains 1 subject.
-        print(f"[train] WARNING: subject split failed ({exc}); falling back to chunk-level split for smoke testing.")
+    def _parse_multi(values: list[str]) -> set[str]:
+        out: set[str] = set()
+        for v in values:
+            for item in str(v).split(","):
+                item = item.strip()
+                if item:
+                    out.add(item)
+        return out
+
+    subject_filter = _parse_multi(args.subject_id)
+    session_filter = _parse_multi(args.session_id)
+    if subject_filter:
+        chunks = [c for c in chunks if c.meta.subject_id in subject_filter]
+    if session_filter:
+        chunks = [c for c in chunks if c.meta.session_id in session_filter]
+    if not chunks:
+        raise SystemExit("No chunks left after applying --subject-id/--session-id filters.")
+
+    subjects = sorted({c.meta.subject_id for c in chunks})
+    sessions = sorted({c.meta.session_id for c in chunks})
+    print(f"[train] subjects={len(subjects)} {subjects}")
+    print(f"[train] sessions={len(sessions)}")
+
+    split_kind = str(args.split)
+    if split_kind == "subject":
+        try:
+            split = split_by_subject(
+                chunks,
+                SplitConfig(
+                    val_subjects=int(args.val_subjects),
+                    test_subjects=int(args.test_subjects),
+                    seed=int(args.seed),
+                ),
+            )
+        except ValueError as exc:
+            # Useful when running a quick smoke with --max-chunks that only contains 1 subject.
+            print(
+                f"[train] WARNING: subject split failed ({exc}); falling back to chunk-level split for smoke testing."
+            )
+            split = _split_by_chunk(chunks, seed=int(args.seed))
+    elif split_kind == "session":
+        try:
+            split = split_by_session(
+                chunks,
+                SessionSplitConfig(
+                    val_sessions=int(args.val_sessions),
+                    test_sessions=int(args.test_sessions),
+                    seed=int(args.seed),
+                ),
+            )
+        except ValueError as exc:
+            print(f"[train] WARNING: session split failed ({exc}); falling back to chunk-level split.")
+            split = _split_by_chunk(chunks, seed=int(args.seed))
+    else:
         split = _split_by_chunk(chunks, seed=int(args.seed))
     print(
         f"[train] split: train_chunks={len(split.train)} val_chunks={len(split.val)} test_chunks={len(split.test)}"
@@ -153,16 +223,21 @@ def main() -> None:
     )
 
     ds_train = build_dataset(split.train, win_cfg, include_fft=include_fft)
-    ds_val = build_dataset(split.val, win_cfg, include_fft=include_fft)
-    ds_test = build_dataset(split.test, win_cfg, include_fft=include_fft)
+    ds_val = build_dataset(split.val, win_cfg, include_fft=include_fft) if split.val else None
+    ds_test = build_dataset(split.test, win_cfg, include_fft=include_fft) if split.test else None
+    if ds_val is None:
+        print("[train] WARNING: empty val split; val metrics will be skipped.")
+    if ds_test is None:
+        print("[train] WARNING: empty test split; test metrics will be skipped.")
     print(
-        f"[train] windows: train={ds_train.x.shape[0]} val={ds_val.x.shape[0]} test={ds_test.x.shape[0]} feat_dim={ds_train.x.shape[1]}"
+        f"[train] windows: train={ds_train.x.shape[0]} val={(0 if ds_val is None else ds_val.x.shape[0])} "
+        f"test={(0 if ds_test is None else ds_test.x.shape[0])} feat_dim={ds_train.x.shape[1]}"
     )
 
     scaler = fit_scaler(ds_train.x)
     xtr = scaler.transform(ds_train.x)
-    xva = scaler.transform(ds_val.x)
-    xte = scaler.transform(ds_test.x)
+    xva = scaler.transform(ds_val.x) if ds_val is not None else np.empty((0, xtr.shape[1]), dtype=np.float32)
+    xte = scaler.transform(ds_test.x) if ds_test is not None else np.empty((0, xtr.shape[1]), dtype=np.float32)
 
     # Stage 1: move/rest
     stage1 = train_binary_logreg(
@@ -174,20 +249,23 @@ def main() -> None:
         seed=int(args.seed),
     )
     y1_tr = stage1.predict(xtr, threshold=float(args.p_move))
-    y1_va = stage1.predict(xva, threshold=float(args.p_move))
-    y1_te = stage1.predict(xte, threshold=float(args.p_move))
+    y1_va = stage1.predict(xva, threshold=float(args.p_move)) if ds_val is not None else None
+    y1_te = stage1.predict(xte, threshold=float(args.p_move)) if ds_test is not None else None
+    val_acc = None if ds_val is None else accuracy(ds_val.y_move, y1_va)
+    test_acc = None if ds_test is None else accuracy(ds_test.y_move, y1_te)
     print(
         f"[stage1] acc train={accuracy(ds_train.y_move, y1_tr):.4f} "
-        f"val={accuracy(ds_val.y_move, y1_va):.4f} "
-        f"test={accuracy(ds_test.y_move, y1_te):.4f}"
+        f"val={'n/a' if val_acc is None else f'{val_acc:.4f}'} "
+        f"test={'n/a' if test_acc is None else f'{test_acc:.4f}'}"
     )
-    cm1 = confusion_matrix(ds_test.y_move, y1_te, n_classes=2)
-    print("[stage1] confusion_matrix (test)")
-    _print_cm(cm1, labels=["REST", "MOVE"])
+    if ds_test is not None and y1_te is not None:
+        cm1 = confusion_matrix(ds_test.y_move, y1_te, n_classes=2)
+        print("[stage1] confusion_matrix (test)")
+        _print_cm(cm1, labels=["REST", "MOVE"])
 
     # Stage 2: direction on move windows
     mtr = ds_train.y_dir >= 0
-    mte = ds_test.y_dir >= 0
+    mte = np.zeros((0,), dtype=bool) if ds_test is None else (ds_test.y_dir >= 0)
     stage2 = train_softmax_reg(
         xtr[mtr],
         ds_train.y_dir[mtr],
@@ -197,13 +275,14 @@ def main() -> None:
         l2=float(args.stage2_l2),
         seed=int(args.seed),
     )
-    y2_te = stage2.predict(xte[mte])
-    print(
-        f"[stage2] acc (move windows only) test={accuracy(ds_test.y_dir[mte], y2_te):.4f} n={int(mte.sum())}"
-    )
-    cm2 = confusion_matrix(ds_test.y_dir[mte], y2_te, n_classes=4)
-    print("[stage2] confusion_matrix (test, move windows only)")
-    _print_cm(cm2, labels=["LEFT", "RIGHT", "FORWARD", "BACKWARD"])
+    if ds_test is not None and int(mte.sum()) > 0:
+        y2_te = stage2.predict(xte[mte])
+        print(
+            f"[stage2] acc (move windows only) test={accuracy(ds_test.y_dir[mte], y2_te):.4f} n={int(mte.sum())}"
+        )
+        cm2 = confusion_matrix(ds_test.y_dir[mte], y2_te, n_classes=4)
+        print("[stage2] confusion_matrix (test, move windows only)")
+        _print_cm(cm2, labels=["LEFT", "RIGHT", "FORWARD", "BACKWARD"])
 
     # Combined pipeline (0 = STOP/rest, 1..4 = dir)
     def pipeline_pred(x: np.ndarray) -> np.ndarray:
@@ -213,12 +292,13 @@ def main() -> None:
         out[move] = dir_idx[move] + 1
         return out
 
-    ytrue_te = np.where(ds_test.y_dir >= 0, ds_test.y_dir + 1, 0)
-    ypred_te = pipeline_pred(xte)
-    print(f"[pipe] acc test={accuracy(ytrue_te, ypred_te):.4f}")
-    cm_pipe = confusion_matrix(ytrue_te, ypred_te, n_classes=5)
-    print("[pipe] confusion_matrix (test)")
-    _print_cm(cm_pipe, labels=["STOP", "LEFT", "RIGHT", "FORWARD", "BACKWARD"])
+    if ds_test is not None:
+        ytrue_te = np.where(ds_test.y_dir >= 0, ds_test.y_dir + 1, 0)
+        ypred_te = pipeline_pred(xte)
+        print(f"[pipe] acc test={accuracy(ytrue_te, ypred_te):.4f}")
+        cm_pipe = confusion_matrix(ytrue_te, ypred_te, n_classes=5)
+        print("[pipe] confusion_matrix (test)")
+        _print_cm(cm_pipe, labels=["STOP", "LEFT", "RIGHT", "FORWARD", "BACKWARD"])
 
     model = IntentModel(
         scaler=scaler,

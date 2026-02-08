@@ -150,6 +150,13 @@ STOP 作为 `rest` 的执行动作保留（用于 Stage 1 的 rest 输出，以�
 - 设 `g`（例如 0.2s）
 - 排除靠近 cue on/off 的窗口：`[3-g, 3+g]` 与 `[3+duration-g, 3+duration+g]`
 
+### 6.4.1 训练/评估划分（Subject vs Session）
+
+赛题关注的是“实时、稳定、低误触发”的闭环演示，并未要求跨参与者泛化必须成立。结合非侵入式 BCI 的常见现实约束（通常需要对单一用户做短暂校准），本项目同时支持两类划分方式：
+- `split=subject`：按 `subject_id` 划分训练/验证/测试（更严格，用于评估跨人泛化，避免泄漏）。
+- `split=session`：按 `session_id` 划分（通常配合 `--subject-id <id>` 进行单用户校准训练；同时避免同一录制 session 内泄漏）。
+- `split=chunk`：仅用于快速 smoke（不作为最终严谨评估）。
+
 ### 6.5 模型（fast, simple baseline）
 
 Stage 1：Move vs Rest
@@ -163,8 +170,8 @@ Stage 2：Direction（Left/Right/Forward/Backward）
 - 模型：线性分类器（softmax）
 
 特征（强调推理速度，不引入重依赖）：
-- EEG 每通道统计量：mean、std、RMS
-- EEG 频域近似：FFT bins 计算 alpha/beta bandpower（不依赖 SciPy）
+- EEG 时域能量特征：每通道去 DC 后的 `log-variance`（对跨 session/subject 更稳）
+- EEG 频域近似：rFFT bins 估计 theta/alpha(beta) bandpower，并取 `log-bandpower` + `relative bandpower`（不依赖 SciPy）
 
 部署与推理：
 - baseline 训练/推理优先使用 Numpy 线性模型（矩阵乘法，低延迟，依赖最小）
