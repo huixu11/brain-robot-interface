@@ -160,13 +160,13 @@ STOP 作为 `rest` 的执行动作保留（用于 Stage 1 的 rest 输出，以�
 ### 6.5 模型（fast, simple baseline）
 
 Stage 1：Move vs Rest
-- 输入：窗口特征
+- 输入：EEG 窗口特征（默认使用 **raw 特征**）
 - 输出：`p(move)`
 - 模型：线性分类器（Logistic Regression 级别）
 
 Stage 2：Direction（Left/Right/Forward/Backward）
 - 触发条件：Stage 1 判定 move
-- 输出：`p(left/right/forward/backward)`
+- 输出：`p(left/right/forward/backward)`（默认使用 **baseline-delta 特征**）
 - 模型：线性分类器（softmax）
 
 特征（强调推理速度，不引入重依赖）：
@@ -175,7 +175,13 @@ Stage 2：Direction（Left/Right/Forward/Backward）
 
 Baseline correction（BCI 常用做法，提升稳定性）：
 - 每个 chunk 使用已知 rest 段 `t=0..(cue_start-guard)` 计算一次 baseline 特征向量
-- 每个滑窗特征做 `feat_delta = feat_window - feat_baseline`，减少跨 session 的幅度尺度漂移
+- 为了兼顾 move 检测与方向分类，本仓库实现采用 **dual-feature**（对应 `examples/train_intent.py --feature-layout dual`，默认开启）：
+  - Stage 1（move/rest）使用 `feat_move = feat_window`（raw，保留绝对能量尺度，提升触发率）
+  - Stage 2（direction）使用 `feat_dir = feat_window - feat_baseline`（delta，减少跨 session 漂移，提升方向可分性）
+  - Stage 1/Stage 2 使用 **两个独立 scaler**（`IntentModel.scaler` 与 `IntentModel.scaler_dir`）避免不同特征分布互相干扰
+
+False trigger 训练控制（与赛题第 6 节对齐）：
+- Stage 1 支持类别加权以抑制误触发（`examples/train_intent.py --stage1-balance` 或手动 `--stage1-w-rest`/`--stage1-w-move`）
 
 部署与推理：
 - baseline 训练/推理优先使用 Numpy 线性模型（矩阵乘法，低延迟，依赖最小）
@@ -195,8 +201,11 @@ Baseline correction（BCI 常用做法，提升稳定性）：
 - 方向置信度“峰值差值”约束：`top1 - top2 >= dir_margin` 才允许执行非 STOP（降低 rest 期间误触发）
 - 方向 release：当方向置信度持续低于阈值（`p_dir_off` 或 `dir_margin`）达到 `dir_off_k` 次，输出 STOP 直到重新稳定
 
-推荐 demo 参数（优先降低 `false_rate`，再考虑压低 `onset_latency`）：
-- `dir_k=5`, `dir_off_k=2`, `dir_margin=0.06`
+推荐调参流程（优先降低 `false_rate`，再考虑压低 `onset_latency`）：
+- 用 `examples/eval_closed_loop.py` 在 **test split** 上批量评测 `false_rate_global/move_coverage_global/switches_per_min`，避免只看单个 chunk。
+- 优先调 Stage 1（move/rest）的滞后参数：`p_move_on/p_move_off/move_on_k/move_off_k/ewma_alpha`，先把误触发压住。
+- 再调方向稳定参数：`dir_k/dir_off_k/dir_margin/p_dir/p_dir_off`，在不显著牺牲 `move_coverage` 的前提下减少抖动。
+- 一个可复现实验起点（`update_hz=50`）：`ewma_alpha=0.15 p_move_on=0.68 p_move_off=0.50 move_on_k=5 move_off_k=3 dir_k=5 dir_off_k=2 dir_margin=0.06`
 
 状态机状态：
 - REST
