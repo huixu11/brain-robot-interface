@@ -46,6 +46,7 @@ def _build_feature_table(
     win_cfg: WindowConfig,
     include_fft: bool,
     baseline: str,
+    feature_mode_move: str,
 ) -> FeatureTable:
     feats_move: list[np.ndarray] = []
     feats_dir: list[np.ndarray] = []
@@ -72,12 +73,16 @@ def _build_feature_table(
 
         for w in iter_eeg_windows(chunk, win_cfg):
             f_raw = eeg_window_features(w.x, fs_hz=win_cfg.fs_hz, include_fft=include_fft)
+            if feature_mode_move == "delta" and baseline == "pre_cue" and base_feat is not None and base_feat.shape == f_raw.shape:
+                f_move = (f_raw - base_feat).astype(np.float32, copy=False)
+            else:
+                f_move = f_raw.astype(np.float32, copy=False)
             if baseline == "pre_cue" and base_feat is not None and base_feat.shape == f_raw.shape:
                 f_dir = (f_raw - base_feat).astype(np.float32, copy=False)
             else:
                 f_dir = f_raw.astype(np.float32, copy=False)
 
-            feats_move.append(f_raw.astype(np.float32, copy=False))
+            feats_move.append(f_move)
             feats_dir.append(f_dir)
             y_move.append(1 if w.is_move else 0)
             if w.is_move:
@@ -160,6 +165,13 @@ def main() -> None:
     ap.add_argument("--fs-hz", type=float, default=500.0)
     ap.add_argument("--no-fft", action="store_true")
     ap.add_argument("--baseline", type=str, default="pre_cue", choices=["none", "pre_cue"])
+    ap.add_argument(
+        "--feature-mode-move",
+        type=str,
+        default="auto",
+        choices=["auto", "raw", "delta"],
+        help="Feature mode for Stage 1 (move/rest). 'delta' subtracts pre-cue baseline features. 'auto' picks delta iff baseline=pre_cue.",
+    )
 
     # Calibration training hyperparams (latent s).
     ap.add_argument("--stage1-epochs", type=int, default=50)
@@ -210,7 +222,21 @@ def main() -> None:
     include_fft = not bool(args.no_fft)
     baseline = str(args.baseline)
 
-    table = _build_feature_table(chunks, win_cfg=win_cfg, include_fft=include_fft, baseline=baseline)
+    feature_mode_move_arg = str(args.feature_mode_move)
+    if feature_mode_move_arg == "auto":
+        feature_mode_move = "delta" if baseline == "pre_cue" else "raw"
+    else:
+        feature_mode_move = feature_mode_move_arg
+    if feature_mode_move == "delta" and baseline != "pre_cue":
+        raise SystemExit("--feature-mode-move=delta requires --baseline pre_cue")
+
+    table = _build_feature_table(
+        chunks,
+        win_cfg=win_cfg,
+        include_fft=include_fft,
+        baseline=baseline,
+        feature_mode_move=feature_mode_move,
+    )
     subj_id_to_i = {s: i for i, s in enumerate(table.subj_ids)}
 
     target_i = subj_id_to_i[target_subj]
@@ -363,7 +389,7 @@ def main() -> None:
         baseline=baseline,
         include_fft=include_fft,
         feature_mode="delta" if baseline == "pre_cue" else "raw",
-        feature_mode_move="raw",
+        feature_mode_move=feature_mode_move,
         feature_mode_dir="delta" if baseline == "pre_cue" else "raw",
     )
     model.save_npz(out_path)

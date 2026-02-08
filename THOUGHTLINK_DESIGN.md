@@ -499,6 +499,7 @@ Bonus（赛题加分项）
     - 增加 REST 的训练权重/采样权重（让 Stage 1 偏安全）
     - 选择更抗漂移的特征与基线策略（例如继续使用 `baseline=pre_cue`，并避免窗口跨 cue 边界的泄漏）
     - 在 ELLA 的 basis 学习里优先用 `--basis-task session` 来覆盖漂移形态
+    - 对 ELLA：优先让 Stage 1 也使用 delta 特征（`--feature-mode-move delta`，默认 `auto` 在 `baseline=pre_cue` 时会选 delta），减少跨 session 的整体偏移导致的 “eval session 完全不触发/触发很少”。
   - 只有当 Stage 1 输出靠谱，稳定器的阈值/滞后才不会被迫调到极端保守。
 
   这个阶段建议 commit 什么（让你每一步都可复现）
