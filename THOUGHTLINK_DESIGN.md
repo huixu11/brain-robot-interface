@@ -698,3 +698,64 @@ Bonus（赛题加分项）
 2. 写一个“完美解码器”版本的 `intent_policy.py`：直接用数据标签在 t=3..3+duration 输出对应动作，验证闭环与日志指标计算。  
 3. 再替换为真实模型推理（Stage 1/Stage 2 + 稳定器），并以日志量化 latency/stability/false triggers 的 tradeoff。  
 
+## 9. Demo 与多机器人扩展（时间紧时的最小可交付）
+
+Hackathon 时间有限时，建议用“可复现实验 + 现场闭环演示”的组合交付，而不是无限追求离线分类分数。本节给出 stop criteria、demo 流程与多机器人 fan-out 论证方式（对齐 `Requirement_doc.md` 的评价维度：Latency/Stability/False triggers/Scalability/Demo clarity）。
+
+### 9.1 何时可以直接 Demo（Stop Criteria）
+
+可以认为“够 demo 了”的最小条件（建议都在 held-out `eval` session 上验证）：
+- `false_rate_global <= 0.05`（rest 段误动不超过 5%，满足 demo 及格线 KPI）
+- `trigger_rate > 0` 且 `move_coverage_global > 0`（避免 `false_rate=0` 但全程 STOP 的退化解）
+- `inference_ms p95` 明显小于 `1000/update_hz`（例如 `update_hz=50` 时，小于 20ms；本仓库线性模型通常远低于该值）
+
+建议条件（更像“可用系统”而不是仅仅能跑）：
+- `switches_per_min` 不要过高（避免抖动），且方向切换与 STOP toggles 可解释
+- `onset_latency` 的 p50/p95 不要过大（能在 cue_start=3s 后较快触发）
+
+如果短时间内做不到“低误触发 + 高覆盖 + 低 latency”同时达成：
+- demo 时优先选择低误触发配置（安全优先），并在讲解中明确 tradeoff：更保守的阈值会提高 latency/降低覆盖。
+- 同时保留一个“更激进”的参数点（更快触发但 false 稍高），用来展示 latency-false 的可调节性（赛题 bonus 点）。
+
+### 9.2 Demo 流程（3-5 分钟可完成）
+
+推荐用同一个 `.npz` chunk 演示，顺序如下：
+1. Oracle 闭环（证明仿真链路无误）：
+```powershell
+python examples\intent_policy.py --mode oracle --backend sim --speed 5 --update-hz 50
+```
+2. Model 闭环（展示真实解码 + 稳定器）：
+```powershell
+python examples\intent_policy.py --mode model --model artifacts\intent_ella_<SUBJECT_ID>.npz --backend sim --speed 5 --update-hz 50 <稳定器参数>
+```
+3. 批量闭环指标（展示不是只挑一个 chunk）：
+```powershell
+python examples\eval_closed_loop.py --split all --subset all --subject-id <SUBJECT_ID> --session-id <EVAL_SESSION_ID> --mode model --model artifacts\intent_ella_<SUBJECT_ID>.npz --update-hz 50 <稳定器参数>
+```
+4. 一句话解释指标与赛题点的映射：
+- `false_rate_global` 对应 False Trigger Rate & Confidence Handling
+- `switches_per_min`/STOP toggles 对应 Temporal Stability
+- `inference_ms` 对应 Inference Speed & Latency
+
+### 9.3 多机器人扩展（Fan-Out）怎么讲才可信
+
+赛题强调“one-to-many supervision”。在工程上，brain decoder 的扩展方式通常是 **decode once, fan-out many**：
+- 同一时刻人的脑信号只有一条流，意图解码器只需要跑一次
+- 解码输出是离散指令（`Action`），可以通过路由层分发给一个或多个机器人
+- 因此推理成本不随机器人数量线性增长，主要瓶颈变成安全与路由策略
+
+最小 fan-out 架构（无需改变解码器）：
+- `IntentDecoder`：`EEG -> (p_move, p_dir) -> IntentStabilizer -> Action`
+- `ActionRouter`（可先用传统 UI/键盘做选择，不影响赛题核心）：决定把 `Action` 发给哪一台/哪一组机器人
+- `RobotAgent[i]`：各自的执行器与本地 autonomy；收到 `Action` 作为高层 override 或任务指令
+
+多机器人安全性要点（解释为什么我们强调 `false_rate`）：
+- 如果一个错误 Action 被 fan-out 给很多机器人，影响会被放大，因此需要更严格的误触发控制（本设计给出 `<=0.05` demo 及格线与 `<=0.01` 可扩展量级的 KPI）。
+- 推荐把“低误触发”作为硬约束，用稳定器与（可选）两阶段/多阶段 gating（例如 move/rest 之外再加 intervene/arm 状态）减少误动。
+
+### 9.4 时间不够时的交付策略（务实版）
+
+若截止前无法稳定达到 `<=0.05` 且仍保持可用覆盖：
+- 用 oracle + 模型并排 demo（oracle 证明闭环链路，模型展示现实噪声与改进方向）
+- 用 `eval_closed_loop.py` 报告你的 best-effort 指标，并明确 failure mode（例如某个 eval session no-trigger）与下一步（`feature-mode-move delta`、Stage1 权重、cross-session 轮换）
+- 强调推理速度与可扩展的系统结构：解码器与稳定器开销极小，fan-out 本质是消息分发与安全策略问题
