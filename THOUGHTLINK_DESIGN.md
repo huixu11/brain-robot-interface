@@ -431,15 +431,36 @@ Bonus（赛题加分项）
 - Stage 1（move/rest，二分类）：
   - 对每个用户 `u`：`w_u_move = L_move s_u_move`
   - 预测：`p(move|x) = sigmoid(w_u_move^T x)`
-- Stage 2（direction，4 分类）：
-  - 对每个用户 `u`：`W_u_dir = L_dir S_u_dir`，其中 `W_u_dir` 是 `(d,4)` 权重矩阵，`L_dir` 是 `(d,k)` 字典，`S_u_dir` 是 `(k,4)` 系数矩阵
-  - 预测：`p(dir|x) = softmax(W_u_dir^T x)`
-- 推理成本：与当前 baseline 相同数量级（仍是矩阵乘法/点积），满足赛题的 “fast inference matters more than model size”。
+  - Stage 2（direction，4 分类）：
+    - 对每个用户 `u`：`W_u_dir = L_dir S_u_dir`，其中 `W_u_dir` 是 `(d,4)` 权重矩阵，`L_dir` 是 `(d,k)` 字典，`S_u_dir` 是 `(k,4)` 系数矩阵
+    - 预测：`p(dir|x) = softmax(W_u_dir^T x)`
+  - 推理成本：与当前 baseline 相同数量级（仍是矩阵乘法/点积），满足赛题的 “fast inference matters more than model size”。
 
-训练与更新流程（从简单到复杂，逐步加码）：
-1) 先做一个强 baseline：全数据（多用户）训练一个“全局模型”作为初始化，然后对目标用户用少量数据 fine-tune（最简单、最容易实现）。
-2) 再做 low-rank / shared-basis（ELLA 风格）：
-   - 离线阶段：用多用户的监督数据学习共享字典 `L_move/L_dir`。
+  常见疑问（实现选择的理由）：
+  - 我们到底在训练什么模型？
+    - Stage 1 是二分类 Logistic Regression（`sigmoid`），输出 `p(move)`，用于抑制误触发的第一道关口。
+    - Stage 2 是多分类 Softmax Regression（`softmax`），只在稳定器判定 MOVE 时才输出方向 `LEFT/RIGHT/FORWARD/BACKWARD`。
+  - 为什么“全量数据”训练也会很快？
+    - 数据量本质上不算大（本仓库大约 `900` 个 15s chunk，滑窗后是十几万级窗口），而线性模型每步更新是 `O(N*d)`（`d` 约几十维），Numpy 在 CPU 上很容易跑到秒级或几十秒级。
+    - 这也是刻意遵循 `Requirement_doc.md` 的建议: 先用简单强基线（logistic/softmax/SVM 等），优先保证推理速度与闭环稳定性，再考虑更复杂模型。
+  - 用更多人的数据会更准吗？
+    - 往往更“稳”（尤其是跨 session 漂移更不容易把 REST 判成 MOVE），但前提是严格 split 避免泄漏，并且最终仍需要对目标用户做少量校准（非侵入式脑信号个体差异很大）。
+    - 因此推荐的利用方式不是“直接混在一起当 i.i.d.”，而是:
+      - 用多用户数据学共享结构（全局模型或共享基 `L`）
+      - 用目标用户少量 session 解出个体系数（`s_u`）或做轻量微调
+
+  稳定器参数能否只用“两段 session”自动找？
+  - 可以，但需要明确“调参数据”和“最终评测数据”的边界，避免只在同一段数据上自嗨。
+  - 当目标 subject 只有 3 个 session（例如 `a5136953`）时，一个实用且不泄漏的流程是：
+    - Step A: 用 `train_ella_intent.py` 随机挑 1 个 `eval` session 做最终评测，其余 2 个 session 作为 `calib`（用于训练/调参）。
+    - Step B: 在这 2 个 `calib` session 内，用 `tune_stability.py --split session --val-sessions 1 --test-sessions 1` 自动搜索稳定器参数（val 约束 false_rate，test 作为 sanity check）。
+    - Step C: 把找到的参数固定住，只在 `eval` session 上用 `eval_closed_loop.py --session-id <EVAL>` 汇报最终 `false_rate_global/move_coverage/onset_latency`。
+  - 如果目标 subject 有 4 个 session，则更推荐 `train/val/test = 2/1/1`（val 专职调参，test 专职汇报），结论更稳健。
+
+  训练与更新流程（从简单到复杂，逐步加码）：
+  1) 先做一个强 baseline：全数据（多用户）训练一个“全局模型”作为初始化，然后对目标用户用少量数据 fine-tune（最简单、最容易实现）。
+  2) 再做 low-rank / shared-basis（ELLA 风格）：
+     - 离线阶段：用多用户的监督数据学习共享字典 `L_move/L_dir`。
    - 校准阶段：对新用户只优化 `s_u_move/S_u_dir`（或再加一个轻量 bias），用很少的 chunk/窗口即可把 `REST -> MOVE` 的误触发压住，同时保持 `move_coverage`。
    - Lifelong（可选）：当同一用户的新 session 到来时，只更新 `s_u`（保持字典固定更安全）；或在离线再训练时批量更新字典。
 
