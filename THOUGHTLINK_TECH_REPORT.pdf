@@ -1,0 +1,156 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 3666 >>
+stream
+BT
+/F2 16 Tf
+54 760 Td
+(# ThoughtLink: From Brain to Robot \(Tech Report, 1 page\)) Tj
+/F1 10 Tf
+0 -22 Td
+12 TL
+(VC Track supported by Kernel & Dimensional) Tj
+T*
+T*
+(## Problem) Tj
+T*
+(Robots can perceive and plan, but when ambiguity occurs humans must intervene.) Tj
+T*
+(Today intervention is low-bandwidth \(keyboard/dashboard\). This does not scale.) Tj
+T*
+T*
+(ThoughtLink decodes non-invasive brain signals into discrete, high-level robot) Tj
+T*
+(instructions \(not joint control\), enabling fast one-to-many supervision.) Tj
+T*
+T*
+(## Data & Command Space) Tj
+T*
+(Dataset: `robot_control_data/data/*.npz` \(15s chunks; cue starts at 3s\).) Tj
+T*
+(Signals: 6-channel EEG at 500 Hz \(time-series\).) Tj
+T*
+(Canonical actions: `STOP`, `LEFT`, `RIGHT`, `FORWARD`, `BACKWARD`.) Tj
+T*
+T*
+(## Approach \(Strictly Aligned to Requirement_doc.md\)) Tj
+T*
+(1\) Intent decoder \(fast baseline first\)) Tj
+T*
+(- Windowing: 0.5s windows, 0.1s hop \(real-time compatible\).) Tj
+T*
+(- Features \(per channel\):) Tj
+T*
+(  log-variance + log bandpower \(theta 4-8, alpha 8-13, beta 13-30\) +) Tj
+T*
+(  relative bandpower \(4-30\). For 6 channels => 42-D features.) Tj
+T*
+(- Model \(hierarchical\):) Tj
+T*
+(  Stage1: Binary Logistic Regression \(REST vs MOVE\).) Tj
+T*
+(  Stage2: Softmax Regression \(LEFT/RIGHT/FORWARD/BACKWARD on MOVE windows\).) Tj
+T*
+(- Optional baseline correction: `pre_cue` delta features to reduce drift.) Tj
+T*
+T*
+(2\) Temporal stability & false-trigger suppression \(core hackathon focus\)) Tj
+T*
+(- EWMA smoothing + hysteresis thresholds + debouncing over time.) Tj
+T*
+(- Parameters: `p_move_on/off`, `move_on/off_k`, `p_dir`, `dir_k`, `dir_off_k`,) Tj
+T*
+(  `dir_margin`, `stop_on_dir_uncertain`.) Tj
+T*
+(- Auto-tuning \(`examples/tune_stability.py`\) searches parameters under explicit) Tj
+T*
+(  constraints to avoid degenerate "all STOP" solutions.) Tj
+T*
+T*
+(3\) Multi-subject generalization \(ELLA-style shared basis\)) Tj
+T*
+(- Learn a shared linear basis from non-target subjects; fit target with small) Tj
+T*
+(  calibration sessions to adapt quickly.) Tj
+T*
+(- Implemented in `examples/train_ella_intent.py` \(basis task = session/subject\).) Tj
+T*
+T*
+(## Evaluation \(Real-Time & Closed-Loop\)) Tj
+T*
+(We evaluate in closed-loop replay \(50 Hz\) and in MuJoCo sim:) Tj
+T*
+(- `false_rate_global`: fraction of REST time where predicted action is non-STOP.) Tj
+T*
+(- `onset_latency`: time from cue start \(3s\) to first non-STOP during MOVE.) Tj
+T*
+(- `switches_per_min`: temporal stability / flicker proxy.) Tj
+T*
+(- `inference_ms`: per-tick inference latency \(must support real time\).) Tj
+T*
+T*
+(Internal KPI targets \(for demo + scalability reasoning\):) Tj
+T*
+(- Demo pass: `false_rate_global <= 0.05`.) Tj
+T*
+(- 100-robot scale: `false_rate_global <= 0.01` \(otherwise errors accumulate\).) Tj
+T*
+T*
+(## Example Result \(Illustrative\)) Tj
+T*
+(Subject `37dfbd76`, session `5c71e7df`, update_hz=50 \(ELLA + stabilizer\):) Tj
+T*
+(- `false_rate_global=0.043` \(meets demo pass\), `onset_latency_mean=2.50s`,) Tj
+T*
+(  `inference_ms_mean~0.37ms` \(CPU, numpy\).) Tj
+T*
+(Tradeoff observed: stricter false-trigger settings reduce `move_coverage`.) Tj
+T*
+T*
+(## Demo Commands \(3-5 minutes\)) Tj
+T*
+(1\) Oracle control \(proves sim pipeline\): `examples/intent_policy.py --mode oracle`) Tj
+T*
+(2\) Model control \(decoder + stabilizer\): `examples/intent_policy.py --mode model`) Tj
+T*
+(3\) Batch report \(not cherry-picking\): `examples/eval_closed_loop.py --top-k 5`) Tj
+T*
+T*
+(Key deliverables:) Tj
+T*
+(- Design doc: `THOUGHTLINK_DESIGN.md`) Tj
+T*
+(- Closed-loop scripts: `examples/intent_policy.py`, `examples/eval_closed_loop.py`) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000251 00000 n 
+0000003968 00000 n 
+0000004038 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+4113
+%%EOF
