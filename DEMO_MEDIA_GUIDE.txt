@@ -1,0 +1,38 @@
+MuJoCo Demo Video/GIF Guide (15-30s)
+
+Goal
+- For a MuJoCo simulation demo, a 15-30s video or high-quality GIF increases engagement dramatically.
+- Best format: split-screen. Left = MuJoCo viewer. Right = EEG/state/telemetry (or terminal logs if EEG plot is not available).
+
+Fastest path using the current repo
+
+1) Pick a "demo-safe" chunk that actually sustains movement
+- Avoid chunks where move_coverage is very low. Example: move_coverage=0.04 over a ~10s cue means only ~0.4s of non-STOP.
+- If you replay at --speed 5, that becomes ~0.08s real time, and you will likely not notice any motion (especially with smoothing).
+
+Use top-K selection to find a good chunk:
+  python examples\\eval_closed_loop.py --split all --subset all ^
+    --subject-id <SUBJECT_ID> --session-id <EVAL_SESSION_ID> ^
+    --mode model --model artifacts\\intent_ella_<SUBJECT_ID>.npz --update-hz 50 ^
+    --top-k 5 --top-max-false-rate 0.05 <best_cfg_params>
+
+Pick one of the printed "file=...npz" candidates with higher move_coverage.
+
+2) Record at real-time (or slower) so motion is visible
+- Do NOT use --speed 5 for the recorded clip if coverage is low.
+- Prefer: --speed 1 (real-time) or --speed 0.5 (slow).
+- For visibility, consider: --hold-s 1.0 (keeps the action alive long enough between policy updates).
+
+Run:
+  python examples\\intent_policy.py --npz robot_control_data\\data\\<FILE_FROM_TOPK>.npz ^
+    --mode model --model artifacts\\intent_ella_<SUBJECT_ID>.npz ^
+    --backend sim --speed 1 --update-hz 50 --hold-s 1.0 <best_cfg_params>
+
+3) Recording on Windows (fast)
+- Xbox Game Bar: Win+Alt+R to start/stop recording.
+- Arrange split-screen: MuJoCo viewer on one side, terminal output on the other.
+
+Optional polish (if we add it later)
+- Telemetry overlay is now available in intent_policy.py (OpenCV window):
+  python examples\\intent_policy.py ... --telemetry
+  It plots p_move over time, marks the cue window, shows current action, and prints top direction confidence.

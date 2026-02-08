@@ -7,6 +7,11 @@ import time
 
 import numpy as np
 
+try:
+    import cv2  # type: ignore
+except Exception:  # pragma: no cover
+    cv2 = None  # type: ignore
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -27,6 +32,119 @@ def _default_npz_path() -> Path:
     return files[0]
 
 
+class TelemetryOverlay:
+    """Minimal OpenCV telemetry window for demo recording.
+
+    Shows: p_move(t), cue window, thresholds, and current discrete action.
+    """
+
+    def __init__(self, *, title: str = "ThoughtLink Telemetry", width: int = 720, height: int = 220) -> None:
+        if cv2 is None:
+            raise RuntimeError("OpenCV is not available. Install opencv-python or disable --telemetry.")
+        self._title = str(title)
+        self._w = int(width)
+        self._h = int(height)
+        self._t: list[float] = []
+        self._p: list[float] = []
+        self._last_render_ts = 0.0
+
+    def _pt(self, *, t: float, p: float, x0: int, y0: int, w: int, h: int) -> tuple[int, int]:
+        t = float(np.clip(t, 0.0, 15.0))
+        p = float(np.clip(p, 0.0, 1.0))
+        x = int(round(x0 + (t / 15.0) * (w - 1)))
+        y = int(round(y0 + (1.0 - p) * (h - 1)))
+        return x, y
+
+    def update(
+        self,
+        *,
+        t_sim: float,
+        p_move: float,
+        action: Action,
+        cue_start_s: float,
+        cue_end_s: float,
+        cfg: StabilityConfig,
+        p_move_raw: float | None = None,
+        p_dir_top: tuple[str, float] | None = None,
+    ) -> None:
+        # Collect history for 15s chunk.
+        self._t.append(float(t_sim))
+        self._p.append(float(p_move))
+
+        # Render every tick. (We keep this cheap; it is fine at 50Hz.)
+        bg = np.zeros((self._h, self._w, 3), dtype=np.uint8)
+        bg[:] = (18, 18, 18)
+
+        # Plot area.
+        pad_l, pad_r, pad_t, pad_b = 60, 10, 10, 40
+        x0, y0 = pad_l, pad_t
+        pw = self._w - pad_l - pad_r
+        ph = self._h - pad_t - pad_b
+
+        # Cue window shading.
+        cx0, _ = self._pt(t=float(cue_start_s), p=0.0, x0=x0, y0=y0, w=pw, h=ph)
+        cx1, _ = self._pt(t=float(cue_end_s), p=0.0, x0=x0, y0=y0, w=pw, h=ph)
+        cx0, cx1 = min(cx0, cx1), max(cx0, cx1)
+        if cx1 > cx0:
+            bg[y0 : y0 + ph, cx0:cx1] = (28, 24, 50)
+
+        # Axes box.
+        cv2.rectangle(bg, (x0, y0), (x0 + pw, y0 + ph), (80, 80, 80), 1)
+
+        # Threshold lines.
+        for thr, color, label in [
+            (cfg.p_move_on, (60, 140, 255), "on"),
+            (cfg.p_move_off, (255, 120, 60), "off"),
+        ]:
+            _, y = self._pt(t=0.0, p=float(thr), x0=x0, y0=y0, w=pw, h=ph)
+            cv2.line(bg, (x0, y), (x0 + pw, y), color, 1)
+            cv2.putText(bg, f"{label}={thr:.2f}", (x0 + pw - 120, y - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1)
+
+        # p_move polyline.
+        pts: list[tuple[int, int]] = []
+        for tt, pp in zip(self._t, self._p, strict=False):
+            pts.append(self._pt(t=tt, p=pp, x0=x0, y0=y0, w=pw, h=ph))
+        if len(pts) >= 2:
+            cv2.polylines(bg, [np.asarray(pts, dtype=np.int32)], False, (80, 220, 120), 2)
+
+        # Current time marker.
+        x_now, _ = self._pt(t=float(t_sim), p=0.0, x0=x0, y0=y0, w=pw, h=ph)
+        cv2.line(bg, (x_now, y0), (x_now, y0 + ph), (200, 200, 200), 1)
+
+        # Labels.
+        cv2.putText(bg, "p_move", (10, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1)
+        cv2.putText(bg, "0.0", (18, y0 + ph + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (160, 160, 160), 1)
+        cv2.putText(bg, "15s", (x0 + pw - 26, y0 + ph + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (160, 160, 160), 1)
+        cv2.putText(bg, "1.0", (18, y0 + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (160, 160, 160), 1)
+
+        # Footer text (current values).
+        footer_y = self._h - 14
+        p_raw_s = "" if p_move_raw is None else f" raw={p_move_raw:.2f}"
+        dir_s = ""
+        if p_dir_top is not None:
+            dir_s = f" dir={p_dir_top[0]}({p_dir_top[1]:.2f})"
+        cv2.putText(
+            bg,
+            f"t={t_sim:5.2f}s  action={action.name:<8}  p_move={p_move:.2f}{p_raw_s}{dir_s}",
+            (10, footer_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (235, 235, 235),
+            1,
+        )
+
+        cv2.imshow(self._title, bg)
+        cv2.waitKey(1)
+
+    def close(self) -> None:
+        if cv2 is None:
+            return
+        try:
+            cv2.destroyWindow(self._title)
+        except Exception:
+            pass
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="ThoughtLink intent policy (oracle/model) -> bri.Controller (sim).")
     ap.add_argument("--npz", type=str, default=None, help="Path to a dataset .npz chunk (15s).")
@@ -36,6 +154,14 @@ def main() -> None:
     ap.add_argument("--update-hz", type=float, default=10.0, help="How often to send Action updates")
     ap.add_argument("--hold-s", type=float, default=0.6, help="Controller hold_s (must exceed update interval)")
     ap.add_argument("--speed", type=float, default=1.0, help="Playback speed multiplier (1.0 = realtime)")
+    ap.add_argument(
+        "--telemetry",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Show an OpenCV window with p_move, action, and cue window (useful for split-screen demo recording).",
+    )
+    ap.add_argument("--telemetry-w", type=int, default=720, help="Telemetry window width (px)")
+    ap.add_argument("--telemetry-h", type=int, default=220, help="Telemetry window height (px)")
 
     # Stability knobs (defaults match StabilityConfig).
     ap.add_argument("--ewma-alpha", type=float, default=0.2)
@@ -122,6 +248,13 @@ def main() -> None:
             f"feature_mode_move={feature_mode_move!r} feature_mode_dir={feature_mode_dir!r}"
         )
 
+    overlay: TelemetryOverlay | None = None
+    if bool(args.telemetry):
+        if cv2 is None:
+            print("[intent_policy] WARNING: --telemetry requested but opencv-python is not available; disabling telemetry.")
+        else:
+            overlay = TelemetryOverlay(width=int(args.telemetry_w), height=int(args.telemetry_h))
+
     ctrl = Controller(backend=args.backend, hold_s=float(args.hold_s))
     ctrl.start()
     try:
@@ -136,6 +269,9 @@ def main() -> None:
         next_tick = start
         last_action: Action | None = None
         infer_ms: list[float] = []
+        p_move_last: float = 0.0
+        p_move_last_raw: float | None = None
+        p_dir_top: tuple[str, float] | None = None
 
         # Closed-loop metrics (Requirement_doc.md evaluation criteria).
         t_prev: float | None = None
@@ -177,6 +313,9 @@ def main() -> None:
                     action = move_action
                 else:
                     action = Action.STOP
+                p_move_last = 1.0 if action != Action.STOP else 0.0
+                p_move_last_raw = None
+                p_dir_top = None
             else:
                 assert model is not None
                 assert stabilizer is not None
@@ -187,6 +326,9 @@ def main() -> None:
                 start_i = end - win_n
                 if start_i < 0 or end <= 0 or end > int(eeg.shape[0]):
                     action = Action.STOP
+                    p_move_last = 0.0
+                    p_move_last_raw = None
+                    p_dir_top = None
                 else:
                     t_inf0 = time.perf_counter()
                     f_raw = eeg_window_features(eeg[start_i:end], fs_hz=fs, include_fft=include_fft)
@@ -212,6 +354,10 @@ def main() -> None:
                     p_move = float(model.predict_move_proba(x_move)[0])
                     p_dir = model.predict_direction_proba(x_dir)[0]
                     action = stabilizer.step(p_move=p_move, p_dir=p_dir)
+                    p_move_last_raw = p_move
+                    p_move_last = p_move
+                    top_i = int(np.argmax(p_dir))
+                    p_dir_top = (["LEFT", "RIGHT", "FORWARD", "BACKWARD"][top_i], float(p_dir[top_i]))
                     infer_ms.append((time.perf_counter() - t_inf0) * 1000.0)
 
             if action != last_action:
@@ -226,6 +372,19 @@ def main() -> None:
                 else:
                     print(f"[intent_policy] t={t_sim:6.3f}s action={action}")
                 last_action = action
+
+            if overlay is not None:
+                cfg = stabilizer.cfg if stabilizer is not None else StabilityConfig()
+                overlay.update(
+                    t_sim=float(t_sim),
+                    p_move=float(p_move_last),
+                    p_move_raw=p_move_last_raw,
+                    p_dir_top=p_dir_top,
+                    action=action,
+                    cue_start_s=float(cue_start_s),
+                    cue_end_s=float(cue_end_s),
+                    cfg=cfg,
+                )
 
             if action != Action.STOP and (move_start <= t_sim <= move_end) and not cue_is_rest(cue):
                 triggered_in_move = True
@@ -250,6 +409,8 @@ def main() -> None:
         ctrl.set_action(Action.STOP)
         time.sleep(0.5)
     finally:
+        if overlay is not None:
+            overlay.close()
         if infer_ms:
             arr_ms = np.asarray(infer_ms, dtype=np.float32)
             p95 = float(np.percentile(arr_ms, 95))
