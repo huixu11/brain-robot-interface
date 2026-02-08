@@ -348,6 +348,23 @@ python examples\tune_stability.py `
 ```
 - `--objective robust` 会用 `val+test` 的最坏情况打分（更鲁棒，但等价于“用 test 参与调参”，不适合作为严格的最终评测流程）。
 
+常见问题：`false_rate_global` 偏高如何处理（按优先级排查）
+- 先看 Stage 1（move/rest）混淆矩阵：如果 `REST -> MOVE` 大量发生，这是 rest 段误动的直接来源。此时不要优先微调 direction 参数，而应先让 Stage 1 更偏安全。
+- 优先手段 1（训练侧）：对 Stage 1 加权抑制误触发。
+
+```powershell
+# 自动按类频率平衡（常用起点）
+python examples\train_intent.py --split session --subject-id a5136953 --val-sessions 1 --test-sessions 1 `
+  --stage1-balance --out artifacts\intent_user_bal.npz
+
+# 或更强的 REST 权重（更安全，但会牺牲触发率/覆盖率）
+python examples\train_intent.py --split session --subject-id a5136953 --val-sessions 1 --test-sessions 1 `
+  --stage1-w-rest 2 --stage1-w-move 1 --out artifacts\intent_user_safe.npz
+```
+
+- 优先手段 2（稳定器侧）：在不改变模型的前提下，提高 move-on 门槛（降低误触发），并加快 move-off（减少 rest 段拖尾）。典型方向是：提高 `p_move_on`/`move_on_k`，同时提高 `p_move_off` 或降低 `move_off_k`。
+- 如果你为了提高 `move_coverage` 关闭了 `stop_on_dir_uncertain`（`--no-stop-on-dir-uncertain`），要特别关注 `release_rate/no_release`。MOVE 状态下“保持上一方向”容易把动作拖到 rest 段，导致 `false_rate_global` 上升；这时 move-off 需要更严格（更快回到 REST）。
+
 Bonus（赛题加分项）
 - latency-accuracy tradeoff：对 window/hop/K/阈值做系统 ablation
 - failure modes：误触发类别、边界抖动、跨 subject 泛化
