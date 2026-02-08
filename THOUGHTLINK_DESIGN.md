@@ -336,6 +336,18 @@ python examples\train_intent.py --split session --subject-id a5136953 --val-sess
 - 先 `--mode oracle` 验证闭环与指标计算
 - 再 `--mode model` 展示真实解码 + 稳定器，并输出 `inference_ms` 与闭环指标
 
+可选：自动找稳定器参数（推荐用于快速迭代）
+- 本仓库提供 `examples/tune_stability.py`：在 `val` 上自动搜索一批 `StabilityConfig` 候选（默认随机 200 组），以 `false_rate_global <= target` 为硬约束，优先最大化 `move_coverage_global`，并打印可直接复制到 `eval_closed_loop.py / intent_policy.py` 的参数串。
+- 示例（单用户 session split，先在 val 上找参数，再查看它在 test 的表现）：
+
+```powershell
+python examples\tune_stability.py `
+  --split session --subject-id a5136953 --val-sessions 1 --test-sessions 1 `
+  --model artifacts\intent_user.npz --update-hz 50 `
+  --target-false-rate 0.05 --max-evals 200
+```
+- `--objective robust` 会用 `val+test` 的最坏情况打分（更鲁棒，但等价于“用 test 参与调参”，不适合作为严格的最终评测流程）。
+
 Bonus（赛题加分项）
 - latency-accuracy tradeoff：对 window/hop/K/阈值做系统 ablation
 - failure modes：误触发类别、边界抖动、跨 subject 泛化
