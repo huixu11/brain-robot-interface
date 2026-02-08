@@ -348,6 +348,37 @@ python examples\tune_stability.py `
 ```
 - `--objective robust` 会用 `val+test` 的最坏情况打分（更鲁棒，但等价于“用 test 参与调参”，不适合作为严格的最终评测流程）。
 
+如何在 session 数有限时做“训练/调参/评测”切分（非常重要）
+- 本数据集是按 `subject_id/session_id` 组织的，**跨 session 漂移**往往是 `false_rate_global` 爆炸的主要原因（尤其是 Stage 1 把 REST 误判为 MOVE）。因此调参时必须确保训练集包含足够多的 session，避免“train 只有 1 个 session”导致的偶然性。
+- 如果你想严格做 `train/val/test = 2/1/1`（推荐，用于自动调参 + 最终评测分离），需要该 subject 至少有 4 个 session。实践中建议挑“session 最多的 subject”来做稳定器搜索与展示，避免 session 不足导致的调参偏差。
+- 如果某个 subject 只有 3 个 session（例如 `a5136953`），无法同时做到 `train=2,val=1,test=1`。此时有两种务实做法：
+  - 做法 A（更严谨）：轮换 test session 做 3 折 cross-session（每次 `train=2,test=1`），把 `false_rate_global/move_coverage` 在 3 个 test 上取均值/分位数，避免挑选有利 session。
+  - 做法 B（更省事）：固定 `train=2,test=1`，用 `examples/tune_stability.py` 在 train 上找参数，然后只在 test 上复核一次（注意：没有 val，调参结论不如做法 A 稳健）。
+
+示例：只有 3 个 session 的 subject（无 val）
+
+```powershell
+# 训练：train=2 sessions, test=1 session
+python examples\train_intent.py --split session --subject-id a5136953 --val-sessions 0 --test-sessions 1 `
+  --stage1-balance --out artifacts\intent_a513_2sess.npz
+
+# 自动找参数：在 train(2 sess) 上搜索，并打印 best_cfg 在 test(1 sess) 的复核结果
+python examples\tune_stability.py --split session --subject-id a5136953 --val-sessions 0 --test-sessions 1 `
+  --model artifacts\intent_a513_2sess.npz --update-hz 50 --target-false-rate 0.05 --max-evals 200
+```
+
+示例：session >= 4 的 subject（推荐，有 val）
+
+```powershell
+# 训练：train=2 sessions, val=1 session, test=1 session
+python examples\train_intent.py --split session --subject-id d696086d --val-sessions 1 --test-sessions 1 `
+  --stage1-balance --out artifacts\intent_d696.npz
+
+# 自动找参数：在 val 上搜索，再在 test 上复核
+python examples\tune_stability.py --split session --subject-id d696086d --val-sessions 1 --test-sessions 1 `
+  --model artifacts\intent_d696.npz --update-hz 50 --target-false-rate 0.05 --max-evals 200
+```
+
 常见问题：`false_rate_global` 偏高如何处理（按优先级排查）
 - 先看 Stage 1（move/rest）混淆矩阵：如果 `REST -> MOVE` 大量发生，这是 rest 段误动的直接来源。此时不要优先微调 direction 参数，而应先让 Stage 1 更偏安全。
 - 优先手段 1（训练侧）：对 Stage 1 加权抑制误触发。
