@@ -514,6 +514,71 @@ Bonus（赛题加分项）
     - `robot_control_data/`（数据）
     - `artifacts/*.npz`（模型权重通常较大，建议作为运行产物保存或在提交说明里给出生成命令；如 hackathon 需要交付权重文件，可打包为 release/附件而非 git 版本控制）
 
+  #### 6.10.2 本次迭代做了哪些更新？问题如何被定位与解决？
+
+  这部分用于记录“从现象到修复”的工程链路，方便复现与向评委解释 tradeoff（同样对齐 `Requirement_doc.md` 的评价点：false trigger、stability、latency、scalability）。
+
+  本次新增/更新（与本仓库代码一致）：
+  - `examples/train_ella_intent.py`：
+    - 新增 `--basis-task {session,subject}`。推荐 `session`，让共享基覆盖更多 session 漂移形态。
+    - 新增 `--feature-mode-move {auto,raw,delta}`。用于控制 Stage 1（move/rest）是否使用 `pre_cue` 基线差分特征；默认 `auto` 会在 `baseline=pre_cue` 时选 `delta`。
+  - `THOUGHTLINK_DESIGN.md`：
+    - 补充 ELLA 的可运行命令、数据切分防泄漏流程、以及遇到 no-trigger/全 STOP 退化时的处理路径（Runbook）。
+
+  问题现象（闭环评测）：
+  - 在 calib sessions 上调参可以达到较低 `false_rate_global`，但迁移到 held-out eval session 后出现:
+    - `false_rate_global = 0` 且 `move_coverage_global = 0`
+    - `trigger_rate = 0`、`no_trigger = 全部`（等价于全程输出 `STOP`）
+  - 这不是“模型变好了”，而是稳定器过于保守导致的退化解。赛题需要的是“低误触发 + 仍然能及时执行意图”。
+
+  根因定位（为什么会全 STOP）：
+  - 稳定器是 gated 的：只有当 `p(move)` 连续超过阈值并通过滞后计数，才会从 REST 切换到 MOVE。
+  - 跨 session 漂移会导致 Stage 1 的 `p(move)` 分布整体偏移（例如整体变低），从而让“在 calib 上刚好能触发的阈值/滞后”在 eval 上完全触发不了。
+  - 因此，单纯追求更低 `false_rate` 的参数搜索，会倾向产生 “把门槛提到 eval 永远过不去” 的候选，造成全 STOP。
+
+  解决方案（分两层，先评测流程再模型改进）：
+  - 评测/调参层（不改模型也能避免退化解）：
+    - `tune_stability.py` 搜索时必须加“可用性”约束，避免全 STOP：
+      - `--min-move-coverage`（例如 `>= 0.15`）
+      - `--min-trigger-rate`（例如 `>= 0.6`）
+    - 使用 `--objective robust`，让候选同时在 calib 的 val+test 上更保守，减少偶然性。
+    - 严格不在 eval session 上调参，只在 eval 上做一次最终复核。
+  - 模型层（提升跨 session 稳定性，减少 `p(move)` 整体漂移）：
+    - 对 ELLA Stage 1 使用 delta 特征（`--feature-mode-move delta`），与 `baseline=pre_cue` 配合，用 pre-cue 基线抵消 session 级别的整体偏移。
+    - 仍可配合 Stage 1 加权（让模型更偏安全或更偏敏感），再在稳定器层做最终权衡。
+
+  下一步（推荐执行顺序）
+  - Step 1: 用 ELLA 重训模型并开启 Stage 1 delta：
+  ```powershell
+  python examples\train_ella_intent.py `
+    --target-subject a5136953 `
+    --eval-sessions 1 --calib-sessions 0 `
+    --basis-task session `
+    --baseline pre_cue `
+    --feature-mode-move delta
+  ```
+  - Step 2: 只在 calib sessions 上调参（加可用性约束），并固定参数：
+  ```powershell
+  python examples\tune_stability.py `
+    --split session --subject-id a5136953 `
+    --session-id <CALIB_SESSION_1> --session-id <CALIB_SESSION_2> `
+    --val-sessions 1 --test-sessions 1 `
+    --model artifacts\intent_ella_a5136953.npz `
+    --target-false-rate 0.05 `
+    --min-move-coverage 0.15 --min-trigger-rate 0.6 `
+    --max-evals 800 --objective robust
+  ```
+  - Step 3: 只在 eval session 上做最终汇报（避免泄漏）：
+  ```powershell
+  python examples\eval_closed_loop.py `
+    --split all --subset all `
+    --subject-id a5136953 --session-id <EVAL_SESSION_ID> `
+    --mode model --model artifacts\intent_ella_a5136953.npz `
+    --update-hz 50 `
+    <粘贴 best_cfg>
+  ```
+  - Step 4: 如果仍出现 eval 触发极低，做 cross-session 轮换（3 折）汇总 p50/p95，避免单 session 偶然性；或选 session>=4 的 subject 做更严谨的 `2/1/1` split。
+
   训练与更新流程（从简单到复杂，逐步加码）：
   1) 先做一个强 baseline：全数据（多用户）训练一个“全局模型”作为初始化，然后对目标用户用少量数据 fine-tune（最简单、最容易实现）。
   2) 再做 low-rank / shared-basis（ELLA 风格）：
