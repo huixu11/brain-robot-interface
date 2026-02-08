@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 
-def eeg_window_features(x: np.ndarray, fs_hz: float) -> np.ndarray:
+def eeg_window_features(x: np.ndarray, fs_hz: float, *, include_fft: bool = True) -> np.ndarray:
     """Compute cheap, deterministic features for an EEG window.
 
     x: (n_samples, n_channels)
@@ -24,6 +24,10 @@ def eeg_window_features(x: np.ndarray, fs_hz: float) -> np.ndarray:
     std = x.std(axis=0)
     rms = np.sqrt((x * x).mean(axis=0))
 
+    if not include_fft:
+        feat = np.concatenate([mean, std, rms], axis=0).astype(np.float32)
+        return feat
+
     # Simple bandpower estimates via rFFT bins (no SciPy dependency).
     freqs = np.fft.rfftfreq(n, d=1.0 / fs_hz).astype(np.float32)
     spec = np.fft.rfft(x, axis=0)
@@ -41,4 +45,3 @@ def eeg_window_features(x: np.ndarray, fs_hz: float) -> np.ndarray:
 
     feat = np.concatenate([mean, std, rms, alpha, beta], axis=0).astype(np.float32)
     return feat
-

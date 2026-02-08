@@ -173,4 +173,3 @@ def split_by_subject(chunks: list[Chunk], cfg: SplitConfig) -> Split:
     test = [c for c in chunks if c.meta.subject_id in test_sub]
 
     return Split(train=train, val=val, test=test)
-

@@ -167,8 +167,8 @@ Stage 2：Direction（Left/Right/Forward/Backward）
 - EEG 频域近似：FFT bins 计算 alpha/beta bandpower（不依赖 SciPy）
 
 部署与推理：
-- 训练可用 `torch`
-- 导出 ONNX 并用 `onnxruntime` 推理（与 `src/bri/backends/sim.py` 的 onnx 使用方式一致）
+- baseline 训练/推理优先使用 Numpy 线性模型（矩阵乘法，低延迟，依赖最小）
+- 可选：如需统一部署形式，可将线性模型导出 ONNX 并用 `onnxruntime` 推理（与 `src/bri/backends/sim.py` 的 onnx 使用方式一致）
 
 ### 6.6 Temporal Stability（显式稳定器，赛题强要求）
 
